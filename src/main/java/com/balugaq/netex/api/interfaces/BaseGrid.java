@@ -6,6 +6,7 @@ import com.balugaq.netex.api.keybind.ActionResult;
 import com.balugaq.netex.api.keybind.Keybind;
 import com.balugaq.netex.api.keybind.Keybinds;
 import com.balugaq.netex.api.keybind.MultiActionHandle;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.GridItemRequest;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -50,7 +51,25 @@ public interface BaseGrid {
                     NodeDefinition definition = NetworkStorage.getNode(menu.getLocation());
                     if (definition == null || definition.getNode() == null)
                         return ActionResult.of(MultiActionHandle.CONTINUE, false);
-                    definition.getNode().getRoot().addItemStack(player.getItemOnCursor());
+                    final ItemStack cursor = player.getItemOnCursor();
+                    if (cursor.getType() != Material.AIR) {
+                        final ItemStack transfer = cursor.clone();
+                        final int originalAmount = transfer.getAmount();
+                        definition.getNode().getRoot().addItemStack0Async(menu.getLocation(), transfer).thenRun(() -> {
+                            final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                            if (moved <= 0) {
+                                return;
+                            }
+
+                            FoliaSupport.runPlayer(player, () -> {
+                                final ItemStack liveCursor = player.getItemOnCursor();
+                                if (liveCursor.getType() != Material.AIR
+                                    && StackUtils.itemsMatch(liveCursor, transfer, true, false)) {
+                                    liveCursor.setAmount(Math.max(0, liveCursor.getAmount() - moved));
+                                }
+                            });
+                        });
+                    }
                     return ActionResult.of(MultiActionHandle.BREAK, false);
                 });
 

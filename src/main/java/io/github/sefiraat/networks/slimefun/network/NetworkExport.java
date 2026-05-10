@@ -5,6 +5,7 @@ import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.utils.BlockMenuUtil;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
@@ -24,6 +25,7 @@ import me.mrCookieSlime.Slimefun.api.inventory.BlockMenu;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenuPreset;
 import me.mrCookieSlime.Slimefun.api.item_transport.ItemTransportFlow;
 import org.bukkit.Material;
+import org.bukkit.Location;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.event.block.BlockBreakEvent;
@@ -45,6 +47,7 @@ public class NetworkExport extends NetworkObject {
     private static final int[] OUTPUT_ITEM_BACKDROP = {14, 15, 16, 23, 25, 32, 33, 34};
 
     private final @NotNull ItemSetting<Integer> tickRate;
+    private final Map<Location, Boolean> pendingFetches = new ConcurrentHashMap<>();
 
     public NetworkExport(
         @NotNull ItemGroup itemGroup,
@@ -97,9 +100,10 @@ public class NetworkExport extends NetworkObject {
     }
 
     private void tryFetchItem(@NotNull BlockMenu blockMenu) {
+        final Location location = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
-        if (definition.getNode() == null) {
+        if (definition == null || definition.getNode() == null) {
             sendFeedback(blockMenu.getLocation(), FeedbackType.NO_NETWORK_FOUND);
             return;
         }
@@ -115,11 +119,17 @@ public class NetworkExport extends NetworkObject {
         ItemStack clone = testItem.clone();
 
         ItemRequest itemRequest = new ItemRequest(clone, clone.getMaxStackSize());
-        ItemStack retrieved = definition.getNode().getRoot().getItemStack0(blockMenu.getLocation(), itemRequest);
-        if (retrieved != null) {
-            BlockMenuUtil.pushItem(blockMenu, retrieved, OUTPUT_ITEM_SLOT);
+        if (pendingFetches.putIfAbsent(location, Boolean.TRUE) != null) {
+            return;
         }
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+        definition.getNode().getRoot().getItemStack0Async(location, itemRequest).whenComplete((retrieved, throwable) ->
+            FoliaSupport.runRegion(location, () -> {
+                pendingFetches.remove(location);
+                if (retrieved != null) {
+                    BlockMenuUtil.pushItem(blockMenu, retrieved, OUTPUT_ITEM_SLOT);
+                }
+                sendFeedback(location, FeedbackType.WORKING);
+            }));
     }
 
     @Override

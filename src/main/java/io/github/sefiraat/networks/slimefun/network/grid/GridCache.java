@@ -11,6 +11,7 @@ import org.jetbrains.annotations.Range;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 @Getter
 @Setter
@@ -38,6 +39,9 @@ public class GridCache {
 
     @Nullable
     private List<Map.Entry<ItemStack, Long>> entriesCache;
+
+    @Nullable
+    private CompletableFuture<List<Map.Entry<ItemStack, Long>>> entriesFuture;
 
     public GridCache(int page, int maxPages, @NotNull SortOrder sortOrder) {
         this.page = page;

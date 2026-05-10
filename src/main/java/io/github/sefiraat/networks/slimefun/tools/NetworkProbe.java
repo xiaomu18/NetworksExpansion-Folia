@@ -37,6 +37,14 @@ public class NetworkProbe extends SpecialSlimefunItem implements CanCooldown {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Block block, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(block)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(block.getLocation(), runnable);
+        }
+    }
+
     public NetworkProbe(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -95,101 +103,74 @@ public class NetworkProbe extends SpecialSlimefunItem implements CanCooldown {
             final int itemDifferenters = root.getItemDifferenters().size();
             final int storageCardConverters = root.getStorageCardConverters().size();
             final int facingPresetters = root.getFacingPresetters().size();
-
-            final Map<ItemStack, Long> allNetworkItems = root.getAllNetworkItemsLongType();
-            final int distinctItems = allNetworkItems.size();
-
-            long totalItems = allNetworkItems.values().stream()
-                .mapToLong(integer -> integer)
-                .sum();
-
             final String nodeCount = root.getNodeCount() >= root.getMaxNodes()
                 ? Theme.ERROR + String.valueOf(root.getNodeCount()) + "+"
                 : String.valueOf(root.getNodeCount());
+            root.getAllNetworkItemsLongTypeAsync().thenAccept(allNetworkItems -> FoliaSupport.runPlayer(player, () -> {
+                final int distinctItems = allNetworkItems.size();
+                long totalItems = allNetworkItems.values().stream().mapToLong(Long::longValue).sum();
 
-            final ChatColor c = Theme.CLICK_INFO.getColor();
-            final ChatColor p = Theme.SUCCESS.getColor();
+                player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
+                player.sendMessage(Lang.getString("messages.completed-operation.probe.expansion_title"));
+                player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
+                player.sendMessage(formatter(ExpansionItemStacks.NETWORK_BLUEPRINT_DECODER.getDisplayName(), decoders));
+                player.sendMessage(formatter(ExpansionItemStacks.QUANTUM_MANAGER.getDisplayName(), quantumManagers));
+                player.sendMessage(formatter(ExpansionItemStacks.DRAWER_MANAGER.getDisplayName(), drawerManagers));
+                player.sendMessage(formatter(ExpansionItemStacks.CRAFTER_MANAGER.getDisplayName(), crafterManagers));
+                player.sendMessage(formatter(ExpansionItemStacks.ITEM_FLOW_VIEWER.getDisplayName(), itemFlowViewers));
+                player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_WIRELESS_TRANSMITTER.getDisplayName(), advancedWirelessTransmitters));
+                player.sendMessage(formatter(Lang.getString("icons.ae_switcher.name"), aeSwitchers));
+                player.sendMessage(formatter(ExpansionItemStacks.ITEM_DIFFERENTER.getDisplayName(), itemDifferenters));
+                player.sendMessage(formatter(ExpansionItemStacks.STORAGE_CARD_CONVERTER.getDisplayName(), storageCardConverters));
+                player.sendMessage(formatter(ExpansionItemStacks.FACING_PRESETTER.getDisplayName(), facingPresetters));
+                player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_IMPORT.getDisplayName(), advancedImporters));
+                player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_EXPORT.getDisplayName(), advancedExporters));
+                player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_GREEDY_BLOCK.getDisplayName(), advancedGreedyBlocks));
+                player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_PURGER.getDisplayName(), advancedPurgers));
+                player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_VACUUM.getDisplayName(), advancedVacuums));
+                player.sendMessage(formatter(ExpansionItemStacks.TRANSFER.getDisplayName(), transfers));
+                player.sendMessage(formatter(ExpansionItemStacks.TRANSFER_GRABBER.getDisplayName(), transferGrabbers));
+                player.sendMessage(formatter(ExpansionItemStacks.TRANSFER_PUSHER.getDisplayName(), transferPushers));
+                player.sendMessage(formatter(ExpansionItemStacks.LINE_TRANSFER_VANILLA_PUSHER.getDisplayName(), lineTransferVanillaPushers));
+                player.sendMessage(formatter(ExpansionItemStacks.LINE_TRANSFER_VANILLA_GRABBER.getDisplayName(), lineTransferVanillaGrabbers));
+                player.sendMessage(formatter(ExpansionItemStacks.NETWORK_INPUT_ONLY_MONITOR.getDisplayName(), inputOnlyMonitor));
+                player.sendMessage(formatter(ExpansionItemStacks.NETWORK_OUTPUT_ONLY_MONITOR.getDisplayName(), outputOnlyMonitor));
+                player.sendMessage(formatter(stringOrSpaces(ExpansionItemStacks.LINE_POWER_OUTLET_1.getDisplayName()).substring(0, 6), linePowerOutlets));
 
-            player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
-            player.sendMessage(Lang.getString("messages.completed-operation.probe.expansion_title"));
-            player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
-            player.sendMessage(formatter(ExpansionItemStacks.NETWORK_BLUEPRINT_DECODER.getDisplayName(), decoders));
-            player.sendMessage(formatter(ExpansionItemStacks.QUANTUM_MANAGER.getDisplayName(), quantumManagers));
-            player.sendMessage(formatter(ExpansionItemStacks.DRAWER_MANAGER.getDisplayName(), drawerManagers));
-            player.sendMessage(formatter(ExpansionItemStacks.CRAFTER_MANAGER.getDisplayName(), crafterManagers));
-            player.sendMessage(formatter(ExpansionItemStacks.ITEM_FLOW_VIEWER.getDisplayName(), itemFlowViewers));
-            player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_WIRELESS_TRANSMITTER.getDisplayName(), advancedWirelessTransmitters));
-            player.sendMessage(formatter(Lang.getString("icons.ae_switcher.name"), aeSwitchers));
-            player.sendMessage(formatter(ExpansionItemStacks.ITEM_DIFFERENTER.getDisplayName(), itemDifferenters));
-            player.sendMessage(formatter(ExpansionItemStacks.STORAGE_CARD_CONVERTER.getDisplayName(), storageCardConverters));
-            player.sendMessage(formatter(ExpansionItemStacks.FACING_PRESETTER.getDisplayName(), facingPresetters));
-            player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_IMPORT.getDisplayName(), advancedImporters));
-            player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_EXPORT.getDisplayName(), advancedExporters));
-            player.sendMessage(
-                formatter(ExpansionItemStacks.ADVANCED_GREEDY_BLOCK.getDisplayName(), advancedGreedyBlocks));
-            player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_PURGER.getDisplayName(), advancedPurgers));
-            player.sendMessage(formatter(ExpansionItemStacks.ADVANCED_VACUUM.getDisplayName(), advancedVacuums));
-            player.sendMessage(formatter(ExpansionItemStacks.TRANSFER.getDisplayName(), transfers));
-            player.sendMessage(formatter(ExpansionItemStacks.TRANSFER_GRABBER.getDisplayName(), transferGrabbers));
-            player.sendMessage(formatter(ExpansionItemStacks.TRANSFER_PUSHER.getDisplayName(), transferPushers));
-            player.sendMessage(formatter(
-                ExpansionItemStacks.LINE_TRANSFER_VANILLA_PUSHER.getDisplayName(), lineTransferVanillaPushers));
-            player.sendMessage(formatter(
-                ExpansionItemStacks.LINE_TRANSFER_VANILLA_GRABBER.getDisplayName(), lineTransferVanillaGrabbers));
-            player.sendMessage(
-                formatter(ExpansionItemStacks.NETWORK_INPUT_ONLY_MONITOR.getDisplayName(), inputOnlyMonitor));
-            player.sendMessage(
-                formatter(ExpansionItemStacks.NETWORK_OUTPUT_ONLY_MONITOR.getDisplayName(), outputOnlyMonitor));
-            player.sendMessage(formatter(
-                stringOrSpaces(ExpansionItemStacks.LINE_POWER_OUTLET_1.getDisplayName())
-                    .substring(0, 6),
-                linePowerOutlets));
+                player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
+                player.sendMessage(Lang.getString("messages.completed-operation.probe.networks_title"));
+                player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
 
-            player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
-            player.sendMessage(Lang.getString("messages.completed-operation.probe.networks_title"));
-            player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_BRIDGE.getDisplayName(), bridges));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_MONITOR.getDisplayName(), monitors));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_IMPORT.getDisplayName(), importers));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_EXPORT.getDisplayName(), exporters));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_GRID.getDisplayName(), grids));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_CELL.getDisplayName(), cells));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_GRABBER.getDisplayName(), grabbers));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_PUSHER.getDisplayName(), pushers));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_PURGER.getDisplayName(), purgers));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_AUTO_CRAFTER.getDisplayName(), crafters));
+                player.sendMessage(formatter(stringOrSpaces(NetworksSlimefunItemStacks.NETWORK_CAPACITOR_1.getDisplayName()).substring(0, 4), powerNodes));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_POWER_DISPLAY.getDisplayName(), powerDisplays));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_RECIPE_ENCODER.getDisplayName(), encoders));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_CONTROL_X.getDisplayName(), cutters));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_CONTROL_V.getDisplayName(), pasters));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_VACUUM.getDisplayName(), vacuums));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_WIRELESS_TRANSMITTER.getDisplayName(), wirelessTransmitters));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_WIRELESS_RECEIVER.getDisplayName(), wirelessReceivers));
+                player.sendMessage(formatter(stringOrSpaces(NetworksSlimefunItemStacks.NETWORK_POWER_OUTLET_1.getDisplayName()).substring(0, 4), powerOutlets));
+                player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_GREEDY_BLOCK.getDisplayName(), greedyBlocks));
 
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_BRIDGE.getDisplayName(), bridges));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_MONITOR.getDisplayName(), monitors));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_IMPORT.getDisplayName(), importers));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_EXPORT.getDisplayName(), exporters));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_GRID.getDisplayName(), grids));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_CELL.getDisplayName(), cells));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_GRABBER.getDisplayName(), grabbers));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_PUSHER.getDisplayName(), pushers));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_PURGER.getDisplayName(), purgers));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_AUTO_CRAFTER.getDisplayName(), crafters));
-            player.sendMessage(formatter(
-                stringOrSpaces(NetworksSlimefunItemStacks.NETWORK_CAPACITOR_1.getDisplayName())
-                    .substring(0, 4),
-                powerNodes));
-            player.sendMessage(
-                formatter(NetworksSlimefunItemStacks.NETWORK_POWER_DISPLAY.getDisplayName(), powerDisplays));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_RECIPE_ENCODER.getDisplayName(), encoders));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_CONTROL_X.getDisplayName(), cutters));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_CONTROL_V.getDisplayName(), pasters));
-            player.sendMessage(formatter(NetworksSlimefunItemStacks.NETWORK_VACUUM.getDisplayName(), vacuums));
-            player.sendMessage(formatter(
-                NetworksSlimefunItemStacks.NETWORK_WIRELESS_TRANSMITTER.getDisplayName(), wirelessTransmitters));
-            player.sendMessage(formatter(
-                NetworksSlimefunItemStacks.NETWORK_WIRELESS_RECEIVER.getDisplayName(), wirelessReceivers));
-            player.sendMessage(formatter(
-                stringOrSpaces(NetworksSlimefunItemStacks.NETWORK_POWER_OUTLET_1.getDisplayName())
-                    .substring(0, 4),
-                powerOutlets));
-            player.sendMessage(
-                formatter(NetworksSlimefunItemStacks.NETWORK_GREEDY_BLOCK.getDisplayName(), greedyBlocks));
-
-            player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
-            player.sendMessage(
-                formatter(Lang.getString("messages.completed-operation.probe.distinct_items"), distinctItems));
-            player.sendMessage(formatter(Lang.getString("messages.completed-operation.probe.total_items"), totalItems));
-            player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
-            player.sendMessage(String.format(
-                Lang.getString("messages.completed-operation.probe.total_nodes"), nodeCount, root.getMaxNodes()));
-            if (root.isOverburdened()) {
-                player.sendMessage(Lang.getString("messages.completed-operation.probe.overburdened"));
-            }
+                player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
+                player.sendMessage(formatter(Lang.getString("messages.completed-operation.probe.distinct_items"), distinctItems));
+                player.sendMessage(formatter(Lang.getString("messages.completed-operation.probe.total_items"), totalItems));
+                player.sendMessage(Lang.getString("messages.completed-operation.probe.split"));
+                player.sendMessage(String.format(Lang.getString("messages.completed-operation.probe.total_nodes"), nodeCount, root.getMaxNodes()));
+                if (root.isOverburdened()) {
+                    player.sendMessage(Lang.getString("messages.completed-operation.probe.overburdened"));
+                }
+            }));
         }
     }
 
@@ -225,23 +206,20 @@ public class NetworkProbe extends SpecialSlimefunItem implements CanCooldown {
         if (optional.isPresent()) {
             final Block block = optional.get();
             final Player player = e.getPlayer();
-            if (!canDirectlyAccess(block)) {
-                player.sendMessage("§cFolia 下无法直接探测另一个 region 中的控制器");
-                e.cancel();
-                return;
-            }
             if (canBeUsed(player, e.getItem())) {
-                SlimefunBlockData blockData = StorageCacheUtils.getBlock(block.getLocation());
-                if (blockData == null) {
-                    return;
-                }
+                e.cancel();
+                runAtTargetRegion(block, () -> {
+                    SlimefunBlockData blockData = StorageCacheUtils.getBlock(block.getLocation());
+                    if (blockData == null) {
+                        return;
+                    }
 
-                SlimefunItem slimefunItem = SlimefunItem.getById(blockData.getSfId());
-                if (slimefunItem instanceof NetworkController) {
-                    e.cancel();
-                    displayToPlayer(block, player);
-                    putOnCooldown(e.getItem());
-                }
+                    SlimefunItem slimefunItem = SlimefunItem.getById(blockData.getSfId());
+                    if (slimefunItem instanceof NetworkController) {
+                        displayToPlayer(block, player);
+                        FoliaSupport.runPlayer(player, () -> putOnCooldown(e.getItem()));
+                    }
+                });
             }
         }
     }

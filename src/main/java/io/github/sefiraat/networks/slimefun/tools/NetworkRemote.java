@@ -46,6 +46,18 @@ public class NetworkRemote extends SpecialSlimefunItem {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Block block, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(block)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(block.getLocation(), runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public NetworkRemote(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -60,22 +72,19 @@ public class NetworkRemote extends SpecialSlimefunItem {
                 final Optional<Block> optional = e.getClickedBlock();
                 if (optional.isPresent()) {
                     final Block block = optional.get();
-                    if (!canDirectlyAccess(block)) {
-                        player.sendMessage(Theme.ERROR + "Folia 下无法直接绑定另一个 region 中的网格");
-                        e.cancel();
-                        return;
-                    }
-                    final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
-                    if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)
-                        && (slimefunItem instanceof NetworkGrid
-                        || slimefunItem instanceof NetworkCraftingGrid
-                        || slimefunItem instanceof NetworkGridNewStyle
-                        || slimefunItem instanceof NetworkCraftingGridNewStyle)) {
-                        setGrid(e.getItem(), block, player);
-                    } else {
-                        player.sendMessage(
-                            Lang.getString("messages.unsupported-operation.remote.must_connect_to_grid"));
-                    }
+                    runAtTargetRegion(block, () -> {
+                        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+                        if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)
+                            && (slimefunItem instanceof NetworkGrid
+                            || slimefunItem instanceof NetworkCraftingGrid
+                            || slimefunItem instanceof NetworkGridNewStyle
+                            || slimefunItem instanceof NetworkCraftingGridNewStyle)) {
+                            setGrid(e.getItem(), block, player);
+                        } else {
+                            sendPlayerMessage(player,
+                                Lang.getString("messages.unsupported-operation.remote.must_connect_to_grid"));
+                        }
+                    });
                 }
             } else {
                 tryOpenGrid(e.getItem(), player, NetworkRemote.this.range);
@@ -123,10 +132,6 @@ public class NetworkRemote extends SpecialSlimefunItem {
     }
 
     public static void openGrid(@NotNull Location location, @NotNull Player player) {
-        if (location.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(location)) {
-            player.sendMessage(Theme.ERROR + "Folia 下无法直接远程打开另一个 region 中的网格");
-            return;
-        }
         SlimefunBlockData blockData = StorageCacheUtils.getBlock(location);
         if (blockData == null) {
             player.sendMessage(Theme.ERROR + "无法找到绑定的网格");
@@ -148,7 +153,7 @@ public class NetworkRemote extends SpecialSlimefunItem {
                         FoliaSupport.runPlayer(player, () -> blockMenu.open(player));
                     }
                 } else {
-                    player.sendMessage(Lang.getString("messages.unsupported-operation.remote.not_a_grid_found"));
+                    sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.remote.not_a_grid_found"));
                 }
             }),
             false);

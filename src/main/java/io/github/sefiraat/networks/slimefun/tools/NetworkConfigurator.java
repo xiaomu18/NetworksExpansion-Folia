@@ -36,6 +36,18 @@ public class NetworkConfigurator extends SpecialSlimefunItem {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Block block, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(block)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(block.getLocation(), runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public NetworkConfigurator(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -47,66 +59,66 @@ public class NetworkConfigurator extends SpecialSlimefunItem {
             final Optional<Block> optional = e.getClickedBlock();
             if (optional.isPresent()) {
                 final Block block = optional.get();
-                if (!canDirectlyAccess(block)) {
-                    player.sendMessage("§cFolia 下无法直接配置另一个 region 中的方块");
-                    e.cancel();
-                    return;
-                }
-                final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+                final boolean sneaking = player.isSneaking();
+                runAtTargetRegion(block, () -> {
+                    final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
 
-                if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)) {
-                    if (slimefunItem instanceof NetworkDirectional directional) {
-                        final BlockMenu blockMenu = StorageCacheUtils.getMenu(block.getLocation());
-                        if (blockMenu == null) {
-                            return;
-                        }
-                        if (player.isSneaking()) {
-                            if (slimefunItem instanceof AdvancedDirectional advancedDirectional) {
-                                ItemMeta itemMeta = e.getItem().getItemMeta();
-                                int amount = advancedDirectional.getLimitQuantity(blockMenu.getLocation());
-                                DataTypeMethods.setCustom(itemMeta, Keys.AMOUNT, DataType.INTEGER, amount);
-                                player.sendMessage(String.format(
-                                    Lang.getString(
-                                        "messages.completed-operation.configurator.copied_limit_quantity"),
-                                    amount));
-                                TransportMode transportMode =
-                                    advancedDirectional.getCurrentTransportMode(blockMenu.getLocation());
-                                DataTypeMethods.setCustom(
-                                    itemMeta, Keys.TRANSFER_MODE, DataType.STRING, String.valueOf(transportMode));
-                                player.sendMessage(String.format(
-                                    Lang.getString(
-                                        "messages.completed-operation.configurator.copied_transport_mode"),
-                                    transportMode));
-                                e.getItem().setItemMeta(itemMeta);
+                    if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)) {
+                        if (slimefunItem instanceof NetworkDirectional directional) {
+                            final BlockMenu blockMenu = StorageCacheUtils.getMenu(block.getLocation());
+                            if (blockMenu == null) {
+                                return;
                             }
-                            setConfigurator(directional, e.getItem(), blockMenu, player);
+                            if (sneaking) {
+                                if (slimefunItem instanceof AdvancedDirectional advancedDirectional) {
+                                    ItemMeta itemMeta = e.getItem().getItemMeta();
+                                    int amount = advancedDirectional.getLimitQuantity(blockMenu.getLocation());
+                                    DataTypeMethods.setCustom(itemMeta, Keys.AMOUNT, DataType.INTEGER, amount);
+                                    sendPlayerMessage(player, String.format(
+                                        Lang.getString(
+                                            "messages.completed-operation.configurator.copied_limit_quantity"),
+                                        amount));
+                                    TransportMode transportMode =
+                                        advancedDirectional.getCurrentTransportMode(blockMenu.getLocation());
+                                    DataTypeMethods.setCustom(
+                                        itemMeta, Keys.TRANSFER_MODE, DataType.STRING, String.valueOf(transportMode));
+                                    sendPlayerMessage(player, String.format(
+                                        Lang.getString(
+                                            "messages.completed-operation.configurator.copied_transport_mode"),
+                                        transportMode));
+                                    e.getItem().setItemMeta(itemMeta);
+                                }
+                                setConfigurator(directional, e.getItem(), blockMenu, player);
+                            } else {
+                                if (slimefunItem instanceof AdvancedDirectional advancedDirectional) {
+                                    ItemMeta itemMeta = e.getItem().getItemMeta();
+                                    Integer amount = DataTypeMethods.getCustom(itemMeta, Keys.AMOUNT, DataType.INTEGER);
+                                    if (amount != null) {
+                                        advancedDirectional.setLimitQuantity(blockMenu.getLocation(), amount);
+                                        sendPlayerMessage(player, Lang.getString(
+                                            "messages.completed-operation.configurator.pasted_limit_quantity"));
+                                    }
+                                    String transportMode =
+                                        DataTypeMethods.getCustom(itemMeta, Keys.TRANSFER_MODE, DataType.STRING);
+                                    if (transportMode != null) {
+                                        advancedDirectional.setTransportMode(
+                                            blockMenu.getLocation(), TransportMode.valueOf(transportMode));
+                                        sendPlayerMessage(player, Lang.getString(
+                                            "messages.completed-operation.configurator.pasted_transport_mode"));
+                                    }
+                                    advancedDirectional.updateShowIcon(blockMenu.getLocation());
+                                    advancedDirectional.updateTransportModeIcon(blockMenu.getLocation());
+                                }
+                                NetworkUtils.applyConfig(directional, e.getItem(), blockMenu, player);
+                            }
                         } else {
-                            if (slimefunItem instanceof AdvancedDirectional advancedDirectional) {
-                                ItemMeta itemMeta = e.getItem().getItemMeta();
-                                Integer amount = DataTypeMethods.getCustom(itemMeta, Keys.AMOUNT, DataType.INTEGER);
-                                if (amount != null) {
-                                    advancedDirectional.setLimitQuantity(blockMenu.getLocation(), amount);
-                                    player.sendMessage(Lang.getString(
-                                        "messages.completed-operation.configurator.pasted_limit_quantity"));
-                                }
-                                String transportMode =
-                                    DataTypeMethods.getCustom(itemMeta, Keys.TRANSFER_MODE, DataType.STRING);
-                                if (transportMode != null) {
-                                    advancedDirectional.setTransportMode(
-                                        blockMenu.getLocation(), TransportMode.valueOf(transportMode));
-                                    player.sendMessage(Lang.getString(
-                                        "messages.completed-operation.configurator.pasted_transport_mode"));
-                                }
-                                advancedDirectional.updateShowIcon(blockMenu.getLocation());
-                                advancedDirectional.updateTransportModeIcon(blockMenu.getLocation());
-                            }
-                            NetworkUtils.applyConfig(directional, e.getItem(), blockMenu, player);
+                            sendPlayerMessage(player,
+                                Lang.getString("messages.unsupported-operation.configurator.not_a_pasteable_block"));
                         }
                     } else {
-                        player.sendMessage(
-                            Lang.getString("messages.unsupported-operation.configurator.not_a_pasteable_block"));
+                        sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.comprehensive.no_permission"));
                     }
-                }
+                });
             }
             e.cancel();
         });

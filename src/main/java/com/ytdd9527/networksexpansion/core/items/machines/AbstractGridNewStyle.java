@@ -54,6 +54,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 @NullMarked
 @SuppressWarnings({"deprecation", "DuplicatedCode"})
@@ -122,33 +124,35 @@ public abstract class AbstractGridNewStyle extends AbstractGrid implements Keybi
         cloneMeta.setLore(cloneLore);
         clone.setItemMeta(cloneMeta);
 
-        NetworkRoot root = definition.getNode().getRoot();
-        boolean success = root.refreshRootItems();
-        if (!success) {
-            return null;
-        }
-
         return clone;
     }
 
     @Override
     public void addToInventory(
         Player player, NodeDefinition definition, GridItemRequest request, BlockMenu menu) {
-        ItemStack requestingStack = definition.getNode().getRoot().getItemStack0(menu.getLocation(), request);
-
-        if (requestingStack == null) {
-            return;
-        }
-
-        HashMap<Integer, ItemStack> remnant = InventoryUtil.addItem(player, requestingStack);
-        remnant.values().stream().findFirst().ifPresent(r2 -> FoliaSupport.runPlayer(player, () -> {
-            if (player.getWorld().getNearbyEntities(player.getLocation(), 5, 5, 5).size()
-                > SmartNetworkCraftingGridNewStyle.THRESHOLD) {
-                player.getWorld().dropItem(player.getLocation(), r2);
-            } else {
-                definition.getNode().getRoot().addItemStack(r2);
+        final Location menuLocation = menu.getLocation();
+        final NetworkRoot root = definition.getNode().getRoot();
+        root.refreshRootItemsAsync().thenCompose(success ->
+            Boolean.TRUE.equals(success)
+                ? root.getItemStack0Async(menuLocation, request)
+                : CompletableFuture.completedFuture(null)).thenAccept(requestingStack -> {
+            if (requestingStack == null) {
+                return;
             }
-        }));
+
+            FoliaSupport.runPlayer(player, () -> {
+                HashMap<Integer, ItemStack> remnant = InventoryUtil.addItem(player, requestingStack);
+                remnant.values().stream().findFirst().ifPresent(r2 -> {
+                    if (player.getWorld().getNearbyEntities(player.getLocation(), 5, 5, 5).size()
+                        > SmartNetworkCraftingGridNewStyle.THRESHOLD) {
+                        player.getWorld().dropItem(player.getLocation(), r2);
+                    } else {
+                        root.addItemStack0Async(menuLocation, r2);
+                    }
+                });
+            });
+            FoliaSupport.runRegion(menuLocation, () -> updateDisplay(menu));
+        });
     }
 
     @Override
@@ -165,8 +169,18 @@ public abstract class AbstractGridNewStyle extends AbstractGrid implements Keybi
             return;
         }
 
-        ItemStack requestingStack = definition.getNode().getRoot().getItemStack0(blockMenu.getLocation(), request);
-        setCursor(player, cursor, requestingStack);
+        final NetworkRoot root = definition.getNode().getRoot();
+        root.refreshRootItemsAsync().thenCompose(success ->
+            Boolean.TRUE.equals(success)
+                ? root.getItemStack0Async(blockMenu.getLocation(), request)
+                : CompletableFuture.completedFuture(null)).thenAccept(requestingStack -> {
+            if (requestingStack == null) {
+                return;
+            }
+
+            FoliaSupport.runPlayer(player, () -> setCursor(player, cursor, requestingStack));
+            FoliaSupport.runRegion(blockMenu.getLocation(), () -> updateDisplay(blockMenu));
+        });
     }
 
     protected static List<String> getLoreAddition(Long long1) {
@@ -395,61 +409,75 @@ public abstract class AbstractGridNewStyle extends AbstractGrid implements Keybi
         if (cache.getEntriesCache() != null) {
             return cache.getEntriesCache();
         }
-        HashSet<SlimefunItem> pass = new HashSet<>();
-        String searchTerm = cache.getFilter();
-        if (searchTerm != null && Networks.getSupportedPluginManager().isJustEnoughGuide()) {
-            try {
-                Bukkit.getOnlinePlayers().stream().findFirst().ifPresent(player -> {
-                    List<SlimefunItem> sfs = new ArrayList<>();
-                    for (ItemStack item : networkRoot.getAllNetworkItemsLongType().keySet()) {
-                        if (item != null && item.getType() != Material.AIR) {
-                            var sf = SlimefunItem.getByItem(item);
-                            if (sf != null) {
-                                sfs.add(sf);
+        CompletableFuture<List<Entry<ItemStack, Long>>> entriesFuture = cache.getEntriesFuture();
+        if (entriesFuture == null) {
+            cache.setEntriesFuture(networkRoot.getAllNetworkItemsLongTypeAsync().thenApply(itemStacks -> {
+                HashSet<SlimefunItem> pass = new HashSet<>();
+                String searchTerm = cache.getFilter();
+                if (searchTerm != null && Networks.getSupportedPluginManager().isJustEnoughGuide()) {
+                    try {
+                        Bukkit.getOnlinePlayers().stream().findFirst().ifPresent(player -> {
+                            List<SlimefunItem> sfs = new ArrayList<>();
+                            for (ItemStack item : itemStacks.keySet()) {
+                                if (item != null && item.getType() != Material.AIR) {
+                                    var sf = SlimefunItem.getByItem(item);
+                                    if (sf != null) {
+                                        sfs.add(sf);
+                                    }
+                                }
                             }
-                        }
+                            List<FilterType> types = new ArrayList<>(Arrays.stream(FilterType.values()).toList());
+                            types.remove(FilterType.BY_DISPLAY_ITEM_NAME);
+                            types.remove(FilterType.BY_RECIPE_ITEM_NAME);
+                            for (FilterType type : types) {
+                                pass.addAll(SearchGroup.filterItems(player, type, searchTerm, true, sfs));
+                            }
+                        });
+                    } catch (Exception ignored) {
                     }
-                    List<FilterType> types = new ArrayList<>(Arrays.stream(FilterType.values()).toList());
-                    types.remove(FilterType.BY_DISPLAY_ITEM_NAME);
-                    types.remove(FilterType.BY_RECIPE_ITEM_NAME);
-                    for (FilterType type : types) {
-                        pass.addAll(SearchGroup.filterItems(player, type, searchTerm, true, sfs));
-                    }
-                });
-            } catch (Exception ignored) {
-            }
-        }
-        var result = networkRoot.getAllNetworkItemsLongType().entrySet().stream()
-            .filter(entry -> {
-                if (searchTerm == null) {
-                    return true;
                 }
-
-                final ItemStack itemStack = entry.getKey();
-                if (pass != null) {
-                    final SlimefunItem slimefunItem = SlimefunItem.getByItem(itemStack);
-                    if (slimefunItem != null) {
-                        if (pass.contains(slimefunItem)) {
+                return itemStacks.entrySet().stream()
+                    .filter(entry -> {
+                        if (searchTerm == null) {
                             return true;
                         }
-                    }
-                }
-                String name = TextUtil.stripColor(
-                    ItemStackHelper.getDisplayName(itemStack).toLowerCase(Locale.ROOT));
-                if (searchTerm.matches("^[a-zA-Z]+$")) {
-                    final String pinyinName = PinyinHelper.toPinyin(name, PinyinStyleEnum.INPUT, "");
-                    final String pinyinFirstLetter = PinyinHelper.toPinyin(name, PinyinStyleEnum.FIRST_LETTER, "");
-                    return name.contains(searchTerm)
-                        || pinyinName.contains(searchTerm)
-                        || pinyinFirstLetter.contains(searchTerm);
-                } else {
-                    return name.contains(searchTerm);
-                }
-            })
-            .sorted(SORT_MAP.get(cache.getSortOrder()))
-            .toList();
-        cache.setEntriesCache(result);
-        return result;
+
+                        final ItemStack itemStack = entry.getKey();
+                        final SlimefunItem slimefunItem = SlimefunItem.getByItem(itemStack);
+                        if (slimefunItem != null && pass.contains(slimefunItem)) {
+                            return true;
+                        }
+
+                        String name = TextUtil.stripColor(
+                            ItemStackHelper.getDisplayName(itemStack).toLowerCase(Locale.ROOT));
+                        if (searchTerm.matches("^[a-zA-Z]+$")) {
+                            final String pinyinName = PinyinHelper.toPinyin(name, PinyinStyleEnum.INPUT, "");
+                            final String pinyinFirstLetter = PinyinHelper.toPinyin(name, PinyinStyleEnum.FIRST_LETTER, "");
+                            return name.contains(searchTerm)
+                                || pinyinName.contains(searchTerm)
+                                || pinyinFirstLetter.contains(searchTerm);
+                        } else {
+                            return name.contains(searchTerm);
+                        }
+                    })
+                    .sorted(SORT_MAP.get(cache.getSortOrder()))
+                    .toList();
+            }));
+            return List.of();
+        }
+
+        if (!entriesFuture.isDone()) {
+            return List.of();
+        }
+
+        cache.setEntriesFuture(null);
+        try {
+            List<Entry<ItemStack, Long>> result = entriesFuture.join();
+            cache.setEntriesCache(result);
+            return result;
+        } catch (CompletionException ignored) {
+            return List.of();
+        }
     }
 
     @Override
@@ -520,7 +548,20 @@ public abstract class AbstractGridNewStyle extends AbstractGrid implements Keybi
         ClickAction action,
         BlockMenu blockMenu) {
         if (itemStack != null && itemStack.getType() != Material.AIR && !StackUtils.isBlacklisted(itemStack)) {
-            root.addItemStack(itemStack);
+            final ItemStack transfer = itemStack.clone();
+            final int originalAmount = transfer.getAmount();
+            root.addItemStack0Async(blockMenu.getLocation(), transfer).thenRun(() -> {
+                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                if (moved <= 0) {
+                    return;
+                }
+
+                FoliaSupport.runPlayer(player, () -> {
+                    if (itemStack.getType() != Material.AIR && StackUtils.itemsMatch(itemStack, transfer, true, false)) {
+                        itemStack.setAmount(Math.max(0, itemStack.getAmount() - moved));
+                    }
+                });
+            });
         }
     }
 

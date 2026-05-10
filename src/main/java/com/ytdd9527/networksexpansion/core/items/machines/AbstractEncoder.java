@@ -7,6 +7,7 @@ import com.balugaq.netex.api.interfaces.CraftTyped;
 import com.balugaq.netex.api.interfaces.RecipeCompletableWithGuide;
 import com.balugaq.netex.utils.BlockMenuUtil;
 import com.balugaq.netex.utils.Lang;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.itemstacks.ItemStackUtil;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkRoot;
@@ -27,6 +28,7 @@ import me.mrCookieSlime.Slimefun.api.inventory.BlockMenuPreset;
 import me.mrCookieSlime.Slimefun.api.inventory.DirtyChestMenu;
 import me.mrCookieSlime.Slimefun.api.item_transport.ItemTransportFlow;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
@@ -37,6 +39,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 public abstract class AbstractEncoder extends NetworkObject implements CraftTyped, RecipeCompletableWithGuide {
     private static final int[] BACKGROUND = new int[]{
@@ -52,6 +56,7 @@ public abstract class AbstractEncoder extends NetworkObject implements CraftType
     private static final int ITEM_TARGET_SLOT = 35;
     private static final int JEG_SLOT = 4;
     private static final int CHARGE_COST = 2000;
+    private static final Map<Location, Boolean> PENDING_ENCODINGS = new ConcurrentHashMap<>();
 
     public AbstractEncoder(
         @NotNull ItemGroup itemGroup,
@@ -83,11 +88,7 @@ public abstract class AbstractEncoder extends NetworkObject implements CraftType
             public void newInstance(@NotNull BlockMenu menu, @NotNull Block b) {
                 menu.addMenuClickHandler(ENCODE_SLOT, (player, s, itemStack, clickAction) -> {
                     int times = clickAction.isShiftClicked() ? 64 : 1;
-                    for (int i = 0; i < times; i++) {
-                        if (!tryEncode(player, menu)) {
-                            break;
-                        }
-                    }
+                    tryEncode(player, menu, times);
                     return false;
                 });
                 addJEGButton(menu, JEG_SLOT);
@@ -133,13 +134,36 @@ public abstract class AbstractEncoder extends NetworkObject implements CraftType
         };
     }
 
-    public boolean tryEncode(@NotNull Player player, @NotNull BlockMenu blockMenu) {
+    public void tryEncode(@NotNull Player player, @NotNull BlockMenu blockMenu, int times) {
+        final Location menuLocation = blockMenu.getLocation();
+        if (PENDING_ENCODINGS.putIfAbsent(menuLocation, Boolean.TRUE) != null) {
+            return;
+        }
+        tryEncodeTimesAsync(player, blockMenu, times).whenComplete((ignored, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> PENDING_ENCODINGS.remove(menuLocation)));
+    }
+
+    private CompletableFuture<Void> tryEncodeTimesAsync(@NotNull Player player, @NotNull BlockMenu blockMenu, int times) {
+        if (times <= 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return tryEncodeOnceAsync(player, blockMenu).thenCompose(success -> {
+            if (!Boolean.TRUE.equals(success)) {
+                return CompletableFuture.completedFuture(null);
+            }
+            return tryEncodeTimesAsync(player, blockMenu, times - 1);
+        });
+    }
+
+    public CompletableFuture<Boolean> tryEncodeOnceAsync(@NotNull Player player, @NotNull BlockMenu blockMenu) {
+        final Location menuLocation = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
         if (definition == null || definition.getNode() == null) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_NETWORK_FOUND);
+            sendFeedback(menuLocation, FeedbackType.NO_NETWORK_FOUND);
             player.sendMessage(Lang.getString("messages.feedback.no_network_found"));
-            return false;
+            return CompletableFuture.completedFuture(false);
         }
 
         final NetworkRoot root = definition.getNode().getRoot();
@@ -147,8 +171,8 @@ public abstract class AbstractEncoder extends NetworkObject implements CraftType
 
         if (networkCharge < CHARGE_COST) {
             player.sendMessage(Lang.getString("messages.unsupported-operation.encoder.not_enough_power"));
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NOT_ENOUGH_POWER);
-            return false;
+            sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_POWER);
+            return CompletableFuture.completedFuture(false);
         }
 
         ItemStack blueprint = blockMenu.getItemInSlot(BLANK_BLUEPRINT_SLOT);
@@ -156,14 +180,14 @@ public abstract class AbstractEncoder extends NetworkObject implements CraftType
         SlimefunItem sfi = SlimefunItem.getByItem(blueprint);
         if (sfi != null && sfi.isDisabled()) {
             player.sendMessage(Lang.getString("messages.unsupported-operation.encoder.disabled_blueprint"));
-            sendFeedback(blockMenu.getLocation(), FeedbackType.DISABLED_BLUEPRINT);
-            return false;
+            sendFeedback(menuLocation, FeedbackType.DISABLED_BLUEPRINT);
+            return CompletableFuture.completedFuture(false);
         }
 
         if (!isValidBlueprint(sfi)) {
             player.sendMessage(Lang.getString("messages.unsupported-operation.encoder.invalid_blueprint"));
-            sendFeedback(blockMenu.getLocation(), FeedbackType.INVALID_BLUEPRINT);
-            return false;
+            sendFeedback(menuLocation, FeedbackType.INVALID_BLUEPRINT);
+            return CompletableFuture.completedFuture(false);
         }
 
         // Get the recipe input
@@ -210,8 +234,8 @@ public abstract class AbstractEncoder extends NetworkObject implements CraftType
             final SlimefunItem sfi2 = SlimefunItem.getByItem(crafted);
             if (sfi2 != null && sfi2.isDisabled()) {
                 player.sendMessage(Lang.getString("messages.unsupported-operation.encoder.disabled_output"));
-                sendFeedback(blockMenu.getLocation(), FeedbackType.DISABLED_OUTPUT);
-                return false;
+                sendFeedback(menuLocation, FeedbackType.DISABLED_OUTPUT);
+                return CompletableFuture.completedFuture(false);
             }
         }
 
@@ -226,40 +250,50 @@ public abstract class AbstractEncoder extends NetworkObject implements CraftType
 
         if (crafted == null || crafted.getType() == Material.AIR) {
             player.sendMessage(Lang.getString("messages.unsupported-operation.encoder.invalid_recipe"));
-            sendFeedback(blockMenu.getLocation(), FeedbackType.INVALID_RECIPE);
-            return false;
+            sendFeedback(menuLocation, FeedbackType.INVALID_RECIPE);
+            return CompletableFuture.completedFuture(false);
         }
 
         final ItemStack blueprintClone = StackUtils.getAsQuantity(blueprint, 1);
+        final ItemStack craftedResult = crafted.clone();
+        final ItemStack[] recipeInputs = inp;
 
-        blueprintSetter(blueprintClone, inp, crafted);
+        blueprintSetter(blueprintClone, recipeInputs, craftedResult);
         if (BlockMenuUtil.fits(blockMenu, blueprintClone, OUTPUT_SLOT)) {
-            ItemStack recover = null;
-            if (blueprint.getAmount() == 1) {
-                recover = root.getItemStack0(blockMenu.getLocation(), new ItemRequest(blueprint, blueprint.getMaxStackSize()));
-            }
-            blueprint.setAmount(blueprint.getAmount() - 1);
-            if (recover != null) {
-                BlockMenuUtil.pushItem(blockMenu, recover, BLANK_BLUEPRINT_SLOT);
-            }
-            int j = 0;
-            for (int recipeSlot : RECIPE_SLOTS) {
-                ItemStack slotItem = blockMenu.getItemInSlot(recipeSlot);
-                if (slotItem != null) {
-                    slotItem.setAmount(slotItem.getAmount() - inp[j].getAmount());
+            final CompletableFuture<ItemStack> recoverFuture = blueprint.getAmount() == 1
+                ? root.getItemStack0Async(menuLocation, new ItemRequest(blueprint, blueprint.getMaxStackSize()))
+                : CompletableFuture.completedFuture(null);
+            return recoverFuture.thenCompose(recover -> FoliaSupport.supplyRegion(menuLocation, () -> {
+                final ItemStack currentBlueprint = blockMenu.getItemInSlot(BLANK_BLUEPRINT_SLOT);
+                if (currentBlueprint == null || currentBlueprint.getType() == Material.AIR) {
+                    if (recover != null) {
+                        root.addItemStack0Async(menuLocation, recover);
+                    }
+                    return false;
                 }
-                j++;
-            }
-            BlockMenuUtil.pushItem(blockMenu, blueprintClone, OUTPUT_SLOT);
-            sendFeedback(blockMenu.getLocation(), FeedbackType.SUCCESS);
+
+                currentBlueprint.setAmount(currentBlueprint.getAmount() - 1);
+                if (recover != null) {
+                    BlockMenuUtil.pushItem(blockMenu, recover, BLANK_BLUEPRINT_SLOT);
+                }
+                int j = 0;
+                for (int recipeSlot : RECIPE_SLOTS) {
+                    ItemStack slotItem = blockMenu.getItemInSlot(recipeSlot);
+                    if (slotItem != null) {
+                        slotItem.setAmount(slotItem.getAmount() - recipeInputs[j].getAmount());
+                    }
+                    j++;
+                }
+                BlockMenuUtil.pushItem(blockMenu, blueprintClone, OUTPUT_SLOT);
+                sendFeedback(menuLocation, FeedbackType.SUCCESS);
+                root.removeRootPower(CHARGE_COST);
+                return true;
+            }));
         } else {
             player.sendMessage(Lang.getString("messages.unsupported-operation.encoder.output_full"));
-            sendFeedback(blockMenu.getLocation(), FeedbackType.OUTPUT_FULL);
-            return false;
+            sendFeedback(menuLocation, FeedbackType.OUTPUT_FULL);
+            return CompletableFuture.completedFuture(false);
         }
-
-        root.removeRootPower(CHARGE_COST);
-        return true;
     }
 
     public void blueprintSetter(ItemStack itemStack, ItemStack[] inputs, ItemStack crafted) {

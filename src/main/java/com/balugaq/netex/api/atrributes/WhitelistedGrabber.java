@@ -1,5 +1,6 @@
 package com.balugaq.netex.api.atrributes;
 
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.utils.StackUtils;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenu;
@@ -53,8 +54,18 @@ public interface WhitelistedGrabber {
                 boolean found = false;
                 for (ItemStack template : templates) {
                     if (StackUtils.itemsMatch(template, itemInSlot)) {
-                        int before = itemInSlot.getAmount();
-                        root.addItemStack0(blockMenu.getLocation(), itemInSlot);
+                        final ItemStack transfer = itemInSlot.clone();
+                        final int originalAmount = transfer.getAmount();
+                        root.addItemStack0Async(blockMenu.getLocation(), transfer).whenComplete((ignored, throwable) ->
+                            FoliaSupport.runRegion(targetMenu.getLocation(), () -> {
+                                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                                if (moved > 0) {
+                                    final ItemStack live = targetMenu.getItemInSlot(slot);
+                                    if (live != null && live.getType() != Material.AIR) {
+                                        live.setAmount(Math.max(0, live.getAmount() - moved));
+                                    }
+                                }
+                            }));
                         found = true;
                         break;
                     }

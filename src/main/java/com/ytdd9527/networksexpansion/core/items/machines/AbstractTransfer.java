@@ -34,12 +34,16 @@ import javax.annotation.ParametersAreNonnullByDefault;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
 public abstract class AbstractTransfer extends AdvancedDirectional implements RecipeDisplayItem {
     private static final Map<Location, Integer> PUSH_TICKER_MAP = new ConcurrentHashMap<>();
     private static final Map<Location, Integer> GRAB_TICKER_MAP = new ConcurrentHashMap<>();
+    private static final Set<Location> PENDING_PUSHES = ConcurrentHashMap.newKeySet();
+    private static final Set<Location> PENDING_GRABS = ConcurrentHashMap.newKeySet();
     private final TransferConfiguration config;
 
     protected AbstractTransfer(
@@ -204,6 +208,9 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             sendFeedback(blockMenu.getLocation(), FeedbackType.NOT_ENOUGH_POWER);
             return;
         }
+        if (!PENDING_PUSHES.add(blockMenu.getLocation())) {
+            return;
+        }
 
         List<ItemStack> templates = new ArrayList<>();
         for (int slot : this.getItemSlots()) {
@@ -213,14 +220,23 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             }
         }
 
-        LineOperationUtil.doOperation(
-            blockMenu.getLocation(),
-            direction,
-            config.maxDistance,
-            false,
-            false,
-            (targetMenu) -> LineOperationUtil.pushItem(
-                targetMenu.getLocation(), root, targetMenu, templates, mode, limitQuantity));
+        final List<CompletableFuture<Void>> futures = new ArrayList<>();
+        try {
+            LineOperationUtil.doOperation(
+                blockMenu.getLocation(),
+                direction,
+                config.maxDistance,
+                false,
+                false,
+                (targetMenu) -> futures.add(LineOperationUtil.pushItemAsync(
+                    targetMenu.getLocation(), root, targetMenu, templates, mode, limitQuantity)));
+        } catch (RuntimeException exception) {
+            PENDING_PUSHES.remove(blockMenu.getLocation());
+            throw exception;
+        }
+
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).whenComplete((ignored, throwable) ->
+            PENDING_PUSHES.remove(blockMenu.getLocation()));
 
         root.removeRootPower(config.defaultRequiredPower);
         sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
@@ -233,17 +249,30 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             sendFeedback(blockMenu.getLocation(), FeedbackType.NOT_ENOUGH_POWER);
             return;
         }
+        if (!PENDING_GRABS.add(blockMenu.getLocation())) {
+            return;
+        }
 
-        LineOperationUtil.doOperation(
-            blockMenu.getLocation(),
-            direction,
-            config.maxDistance,
-            false,
-            false,
-            (targetMenu) ->
-                LineOperationUtil.grabItem(targetMenu.getLocation(), root, targetMenu, mode, limitQuantity));
+        final List<CompletableFuture<Void>> futures = new ArrayList<>();
+        try {
+            LineOperationUtil.doOperation(
+                blockMenu.getLocation(),
+                direction,
+                config.maxDistance,
+                false,
+                false,
+                (targetMenu) -> futures.add(LineOperationUtil.grabItemAsync(
+                    targetMenu.getLocation(), root, targetMenu, mode, limitQuantity)));
+        } catch (RuntimeException exception) {
+            PENDING_GRABS.remove(blockMenu.getLocation());
+            throw exception;
+        }
+
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).whenComplete((ignored, throwable) ->
+            PENDING_GRABS.remove(blockMenu.getLocation()));
 
         root.removeRootPower(config.defaultRequiredPower);
+        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
     }
 
     private void tryVanillaPushItem(
@@ -256,6 +285,9 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             sendFeedback(blockMenu.getLocation(), FeedbackType.NOT_ENOUGH_POWER);
             return;
         }
+        if (!PENDING_PUSHES.add(blockMenu.getLocation())) {
+            return;
+        }
 
         List<ItemStack> templates = new ArrayList<>();
         for (int slot : this.getItemSlots()) {
@@ -265,14 +297,28 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             }
         }
 
-        LineOperationUtil.doVanillaOperation(
-            blockMenu.getLocation(),
-            direction,
-            config.maxDistance,
-            false,
-            false,
-            (menu) -> LineOperationUtil.pushItem(
-                menu.getLocation() == null ? blockMenu.getLocation() : menu.getLocation(), root, menu, templates, mode, limitQuantity));
+        final List<CompletableFuture<Void>> futures = new ArrayList<>();
+        try {
+            LineOperationUtil.doVanillaOperation(
+                blockMenu.getLocation(),
+                direction,
+                config.maxDistance,
+                false,
+                false,
+                (menu) -> futures.add(LineOperationUtil.pushItemAsync(
+                    menu.getLocation() == null ? blockMenu.getLocation() : menu.getLocation(),
+                    root,
+                    menu,
+                    templates,
+                    mode,
+                    limitQuantity)));
+        } catch (RuntimeException exception) {
+            PENDING_PUSHES.remove(blockMenu.getLocation());
+            throw exception;
+        }
+
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).whenComplete((ignored, throwable) ->
+            PENDING_PUSHES.remove(blockMenu.getLocation()));
 
         root.removeRootPower(config.defaultRequiredPower);
         sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
@@ -285,17 +331,34 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             sendFeedback(blockMenu.getLocation(), FeedbackType.NOT_ENOUGH_POWER);
             return;
         }
+        if (!PENDING_GRABS.add(blockMenu.getLocation())) {
+            return;
+        }
 
-        LineOperationUtil.doVanillaOperation(
-            blockMenu.getLocation(),
-            direction,
-            config.maxDistance,
-            false,
-            false,
-            (menu) ->
-                LineOperationUtil.grabItem(menu.getLocation() == null ? blockMenu.getLocation() : menu.getLocation(), root, menu, mode, limitQuantity));
+        final List<CompletableFuture<Void>> futures = new ArrayList<>();
+        try {
+            LineOperationUtil.doVanillaOperation(
+                blockMenu.getLocation(),
+                direction,
+                config.maxDistance,
+                false,
+                false,
+                (menu) -> futures.add(LineOperationUtil.grabItemAsync(
+                    menu.getLocation() == null ? blockMenu.getLocation() : menu.getLocation(),
+                    root,
+                    menu,
+                    mode,
+                    limitQuantity)));
+        } catch (RuntimeException exception) {
+            PENDING_GRABS.remove(blockMenu.getLocation());
+            throw exception;
+        }
+
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).whenComplete((ignored, throwable) ->
+            PENDING_GRABS.remove(blockMenu.getLocation()));
 
         root.removeRootPower(config.defaultRequiredPower);
+        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
     }
 
     @Override

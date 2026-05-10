@@ -23,6 +23,18 @@ public class NetworkAdminDebugger extends SpecialSlimefunItem {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Block block, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(block)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(block.getLocation(), runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public NetworkAdminDebugger(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -41,20 +53,19 @@ public class NetworkAdminDebugger extends SpecialSlimefunItem {
         if (optional.isPresent()) {
             final Block block = optional.get();
             final Player player = e.getPlayer();
-            if (!canDirectlyAccess(block)) {
-                player.sendMessage("§cFolia 下无法直接调试另一个 region 中的方块");
-                e.cancel();
-                return;
-            }
-            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
             if (!player.isOp()) {
                 player.sendMessage(Lang.getString("messages.unsupported-operation.debugger.player_is_not_op"));
                 return;
             }
-            if (slimefunItem instanceof AdminDebuggable debuggable) {
-                debuggable.toggleDebugMode(block.getLocation(), player);
-                e.cancel();
-            }
+            e.cancel();
+            runAtTargetRegion(block, () -> {
+                final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+                if (slimefunItem instanceof AdminDebuggable debuggable) {
+                    debuggable.toggleDebugMode(block.getLocation(), player);
+                } else {
+                    sendPlayerMessage(player, "§c目标方块不可调试");
+                }
+            });
         }
     }
 }

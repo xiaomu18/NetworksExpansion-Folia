@@ -50,6 +50,7 @@ public class NetworkWirelessTransmitter extends NetworkObject {
     private static final int TICKS_PER = 2;
 
     private final Map<Location, Location> linkedLocations = new ConcurrentHashMap<>();
+    private final Map<Location, Boolean> pendingTransfers = new ConcurrentHashMap<>();
 
     public NetworkWirelessTransmitter(
         @NotNull ItemGroup itemGroup,
@@ -104,10 +105,6 @@ public class NetworkWirelessTransmitter extends NetworkObject {
         });
     }
 
-    private boolean canDirectlyAccess(@NotNull Location location) {
-        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
-    }
-
     private void onTick(@NotNull BlockMenu blockMenu) {
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
@@ -124,60 +121,85 @@ public class NetworkWirelessTransmitter extends NetworkObject {
             return;
         }
 
-        if (!canDirectlyAccess(linkedLocation)) {
-            sendFeedback(location, FeedbackType.NO_LINKED_LOCATION_FOUND);
+        final ItemStack templateStack = blockMenu.getItemInSlot(TEMPLATE_SLOT);
+
+        if (templateStack == null || templateStack.getType() == Material.AIR) {
+            sendFeedback(location, FeedbackType.NO_TEMPLATE_FOUND);
             return;
         }
 
-        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(linkedLocation);
-
-        if (!(slimefunItem instanceof NetworkWirelessReceiver)) {
-            linkedLocations.remove(location);
+        if (definition.getNode().getRoot().getRootPower() < REQUIRED_POWER) {
+            sendFeedback(location, FeedbackType.NOT_ENOUGH_POWER);
             return;
         }
 
-        final BlockMenu linkedBlockMenu = StorageCacheUtils.getMenu(linkedLocation);
-        if (linkedBlockMenu == null) {
-            sendFeedback(location, FeedbackType.NO_LINKED_BLOCK_MENU_FOUND);
+        if (pendingTransfers.putIfAbsent(location, Boolean.TRUE) != null) {
             return;
         }
 
-        final ItemStack itemStack = linkedBlockMenu.getItemInSlot(NetworkWirelessReceiver.RECEIVED_SLOT);
+        FoliaSupport.supplyRegion(linkedLocation, () -> {
+            final SlimefunItem linkedItem = StorageCacheUtils.getSfItem(linkedLocation);
+            if (!(linkedItem instanceof NetworkWirelessReceiver)) {
+                return false;
+            }
 
-        if (itemStack == null || itemStack.getType() == Material.AIR) {
-            final ItemStack templateStack = blockMenu.getItemInSlot(TEMPLATE_SLOT);
+            final BlockMenu linkedMenu = StorageCacheUtils.getMenu(linkedLocation);
+            if (linkedMenu == null) {
+                return false;
+            }
 
-            if (templateStack == null || templateStack.getType() == Material.AIR) {
-                sendFeedback(location, FeedbackType.NO_TEMPLATE_FOUND);
+            final ItemStack receivedStack = linkedMenu.getItemInSlot(NetworkWirelessReceiver.RECEIVED_SLOT);
+            return receivedStack == null || receivedStack.getType() == Material.AIR;
+        }).whenComplete((ready, readinessThrowable) -> {
+            if (!Boolean.TRUE.equals(ready)) {
+                FoliaSupport.runRegion(location, () -> {
+                    pendingTransfers.remove(location);
+                    sendFeedback(location, FeedbackType.NO_LINKED_BLOCK_MENU_FOUND);
+                });
                 return;
             }
 
-            if (definition.getNode().getRoot().getRootPower() < REQUIRED_POWER) {
-                sendFeedback(location, FeedbackType.NOT_ENOUGH_POWER);
-                return;
-            }
-
-            final ItemStack stackToPush = definition
-                .getNode()
-                .getRoot()
-                .getItemStack0(
-                    blockMenu.getLocation(),
-                    new ItemRequest(templateStack.clone(), templateStack.getMaxStackSize()));
-
-            if (stackToPush != null) {
-                definition.getNode().getRoot().removeRootPower(REQUIRED_POWER);
-                BlockMenuUtil.pushItem(linkedBlockMenu, stackToPush, NetworkWirelessReceiver.RECEIVED_SLOT);
-                sendFeedback(location, FeedbackType.WORKING);
-                if (definition.getNode().getRoot().isDisplayParticles()) {
-                    final Location particleLocation =
-                        blockMenu.getLocation().clone().add(0.5, 1.1, 0.5);
-                    final Location particleLocation2 =
-                        linkedBlockMenu.getLocation().clone().add(0.5, 2.1, 0.5);
-                    particleLocation.getWorld().spawnParticle(Particle.WAX_ON, particleLocation, 0, 0, 4, 0);
-                    particleLocation2.getWorld().spawnParticle(Particle.WAX_OFF, particleLocation2, 0, 0, -4, 0);
+            definition.getNode().getRoot().getItemStack0Async(
+                blockMenu.getLocation(),
+                new ItemRequest(templateStack.clone(), templateStack.getMaxStackSize())
+            ).whenComplete((stackToPush, throwable) -> {
+                if (stackToPush == null || stackToPush.getType() == Material.AIR) {
+                    FoliaSupport.runRegion(location, () -> pendingTransfers.remove(location));
+                    return;
                 }
-            }
-        }
+
+                FoliaSupport.runRegion(linkedLocation, () -> {
+                    final SlimefunItem currentLinkedItem = StorageCacheUtils.getSfItem(linkedLocation);
+                    final BlockMenu currentLinkedMenu = StorageCacheUtils.getMenu(linkedLocation);
+                    if (!(currentLinkedItem instanceof NetworkWirelessReceiver) || currentLinkedMenu == null) {
+                        FoliaSupport.runRegion(location, () -> {
+                            pendingTransfers.remove(location);
+                            definition.getNode().getRoot().addItemStack0Async(location, stackToPush);
+                            sendFeedback(location, FeedbackType.NO_LINKED_BLOCK_MENU_FOUND);
+                        });
+                        return;
+                    }
+
+                    BlockMenuUtil.pushItem(currentLinkedMenu, stackToPush, NetworkWirelessReceiver.RECEIVED_SLOT);
+                    FoliaSupport.runRegion(location, () -> {
+                        pendingTransfers.remove(location);
+                        definition.getNode().getRoot().removeRootPower(REQUIRED_POWER);
+                        if (stackToPush.getAmount() > 0) {
+                            definition.getNode().getRoot().addItemStack0Async(location, stackToPush);
+                        }
+                        sendFeedback(location, FeedbackType.WORKING);
+                        if (definition.getNode().getRoot().isDisplayParticles()) {
+                            final Location particleLocation =
+                                blockMenu.getLocation().clone().add(0.5, 1.1, 0.5);
+                            final Location particleLocation2 =
+                                currentLinkedMenu.getLocation().clone().add(0.5, 2.1, 0.5);
+                            particleLocation.getWorld().spawnParticle(Particle.WAX_ON, particleLocation, 0, 0, 4, 0);
+                            particleLocation2.getWorld().spawnParticle(Particle.WAX_OFF, particleLocation2, 0, 0, -4, 0);
+                        }
+                    });
+                });
+            });
+        });
     }
 
     @Override

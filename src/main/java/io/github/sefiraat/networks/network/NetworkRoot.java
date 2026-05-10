@@ -52,11 +52,23 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
 @SuppressWarnings("deprecation")
 public class NetworkRoot extends NetworkNode {
+    private enum OutputSourceType {
+        MONITOR_TARGET,
+        CELL,
+        CRAFTER,
+        ADVANCED_GREEDY,
+        GREEDY
+    }
+
+    private record OutputSource(@NotNull Location location, @NotNull OutputSourceType type) {
+    }
+
     public static final int persistentThreshold = Networks.getConfigManager().getPersistentThreshold();
     public static final int cacheMissThreshold = Networks.getConfigManager().getCacheMissThreshold();
     public static final int reduceMs = Networks.getConfigManager().getReduceMs();
@@ -608,6 +620,431 @@ public class NetworkRoot extends NetworkNode {
         }
 
         return StorageCacheUtils.getMenu(location);
+    }
+
+    private static void addLongAmount(@NotNull Map<ItemStack, Long> itemStacks, @Nullable ItemStack itemStack, long amount) {
+        if (itemStack == null || itemStack.getType() == Material.AIR || amount <= 0) {
+            return;
+        }
+
+        ItemStack sample = StackUtils.getAsQuantity(itemStack, 1);
+        Long currentAmount = itemStacks.get(sample);
+        long newAmount;
+        if (currentAmount == null) {
+            newAmount = amount;
+        } else {
+            long newLong = currentAmount + amount;
+            newAmount = newLong < 0 ? 0 : newLong;
+        }
+        itemStacks.put(sample, newAmount);
+    }
+
+    private static void mergeLongAmounts(
+        @NotNull Map<ItemStack, Long> merged,
+        @NotNull Map<ItemStack, Long> additional) {
+        for (Map.Entry<ItemStack, Long> entry : additional.entrySet()) {
+            addLongAmount(merged, entry.getKey(), entry.getValue());
+        }
+    }
+
+    @NotNull
+    private List<OutputSource> getOutputSources() {
+        List<OutputSource> sources = new ArrayList<>();
+        Set<Location> addedMonitorTargets = new HashSet<>();
+
+        Set<Location> monitor = new HashSet<>();
+        monitor.addAll(this.outputOnlyMonitors);
+        monitor.addAll(this.monitors);
+        for (Location monitorLocation : monitor) {
+            BlockFace face = NetworkDirectional.getSelectedFace(monitorLocation);
+            if (face == null) {
+                continue;
+            }
+
+            Location targetLocation = monitorLocation.clone().add(face.getDirection());
+            if (addedMonitorTargets.add(targetLocation)) {
+                sources.add(new OutputSource(targetLocation, OutputSourceType.MONITOR_TARGET));
+            }
+        }
+
+        for (Location location : this.cells) {
+            sources.add(new OutputSource(location, OutputSourceType.CELL));
+        }
+        for (Location location : this.crafters) {
+            sources.add(new OutputSource(location, OutputSourceType.CRAFTER));
+        }
+        for (Location location : this.advancedGreedyBlocks) {
+            sources.add(new OutputSource(location, OutputSourceType.ADVANCED_GREEDY));
+        }
+        for (Location location : this.greedyBlocks) {
+            sources.add(new OutputSource(location, OutputSourceType.GREEDY));
+        }
+
+        return sources;
+    }
+
+    @Nullable
+    private ItemStack takeFromBarrel(@NotNull BarrelIdentity barrelIdentity, @NotNull ItemRequest request) {
+        ItemStack itemStack = barrelIdentity.getItemStack();
+        if (itemStack == null || !StackUtils.itemsMatch(request, itemStack)) {
+            return null;
+        }
+
+        boolean infinity = barrelIdentity instanceof InfinityBarrel;
+        ItemStack fetched = barrelIdentity.requestItem(request);
+        if (fetched == null || fetched.getType() == Material.AIR || (infinity && fetched.getAmount() == 1)) {
+            return null;
+        }
+
+        int preserveAmount = infinity ? fetched.getAmount() - 1 : fetched.getAmount();
+        int takeAmount = Math.min(request.getAmount(), preserveAmount);
+        if (takeAmount <= 0) {
+            return null;
+        }
+
+        ItemStack stackToReturn = fetched.clone();
+        stackToReturn.setAmount(takeAmount);
+        fetched.setAmount(fetched.getAmount() - takeAmount);
+        request.receiveAmount(takeAmount);
+        return stackToReturn;
+    }
+
+    @Nullable
+    private ItemStack takeFromMenu(
+        @NotNull Location location,
+        @NotNull ItemRequest request,
+        boolean markDirty) {
+        BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
+        if (blockMenu == null) {
+            return null;
+        }
+
+        int[] slots = blockMenu.getPreset().getSlotsAccessedByItemTransport(ItemTransportFlow.WITHDRAW);
+        ItemStack stackToReturn = null;
+
+        for (int slot : slots) {
+            final ItemStack itemStack = blockMenu.getItemInSlot(slot);
+            if (itemStack == null
+                || itemStack.getType() == Material.AIR
+                || !StackUtils.itemsMatch(request, itemStack)) {
+                continue;
+            }
+
+            if (markDirty) {
+                blockMenu.markDirty();
+            }
+
+            if (stackToReturn == null) {
+                stackToReturn = itemStack.clone();
+                stackToReturn.setAmount(0);
+            }
+
+            if (request.getAmount() <= itemStack.getAmount()) {
+                int takeAmount = request.getAmount();
+                stackToReturn.setAmount(stackToReturn.getAmount() + takeAmount);
+                itemStack.setAmount(itemStack.getAmount() - takeAmount);
+                request.receiveAmount(takeAmount);
+                return stackToReturn;
+            } else {
+                int taken = itemStack.getAmount();
+                stackToReturn.setAmount(stackToReturn.getAmount() + taken);
+                request.receiveAmount(taken);
+                itemStack.setAmount(0);
+            }
+        }
+
+        return stackToReturn == null || stackToReturn.getAmount() == 0 ? null : stackToReturn;
+    }
+
+    @Nullable
+    private ItemStack takeFromOutputSource(
+        @NotNull Location accessor,
+        @NotNull OutputSource source,
+        @NotNull ItemRequest request) {
+        return switch (source.type()) {
+            case MONITOR_TARGET -> {
+                BarrelIdentity barrelIdentity = getBarrel(source.location(), true);
+                if (barrelIdentity != null) {
+                    yield takeFromBarrel(barrelIdentity, request);
+                }
+
+                StorageUnitData data = getCargoStorageUnitData(source.location());
+                yield data == null ? null : data.requestItem0(accessor, request);
+            }
+            case CELL -> takeFromMenu(source.location(), request, true);
+            case CRAFTER -> takeFromMenu(source.location(), request, false);
+            case ADVANCED_GREEDY -> takeFromMenu(source.location(), request, false);
+            case GREEDY -> takeFromMenu(source.location(), request, true);
+        };
+    }
+
+    @NotNull
+    private Map<ItemStack, Long> collectWithdrawMenuItems(@NotNull Location location) {
+        Map<ItemStack, Long> itemStacks = new HashMap<>();
+        BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
+        if (blockMenu == null) {
+            return itemStacks;
+        }
+
+        int[] slots = blockMenu.getPreset().getSlotsAccessedByItemTransport(ItemTransportFlow.WITHDRAW);
+        for (int slot : slots) {
+            ItemStack itemStack = blockMenu.getItemInSlot(slot);
+            addLongAmount(itemStacks, itemStack, itemStack == null ? 0 : itemStack.getAmount());
+        }
+        return itemStacks;
+    }
+
+    @NotNull
+    private Map<ItemStack, Long> collectMonitorTargetItems(@NotNull Location targetLocation) {
+        Map<ItemStack, Long> itemStacks = new HashMap<>();
+        SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetLocation);
+
+        if (Networks.getSupportedPluginManager().isInfinityExpansion() && slimefunItem instanceof StorageUnit unit) {
+            BlockMenu menu = StorageCacheUtils.getMenu(targetLocation);
+            if (menu == null) {
+                return itemStacks;
+            }
+            InfinityBarrel infinityBarrel = getInfinityBarrel(menu, unit);
+            if (infinityBarrel != null) {
+                addLongAmount(itemStacks, infinityBarrel.getItemStack(), infinityBarrel.getAmount());
+            }
+            return itemStacks;
+        }
+
+        if (Networks.getSupportedPluginManager().isFluffyMachines() && slimefunItem instanceof Barrel barrel) {
+            BlockMenu menu = StorageCacheUtils.getMenu(targetLocation);
+            if (menu == null) {
+                return itemStacks;
+            }
+            FluffyBarrel fluffyBarrel = getFluffyBarrel(menu, barrel);
+            if (fluffyBarrel != null) {
+                addLongAmount(itemStacks, fluffyBarrel.getItemStack(), fluffyBarrel.getAmount());
+            }
+            return itemStacks;
+        }
+
+        if (slimefunItem instanceof NetworkQuantumStorage) {
+            BlockMenu menu = StorageCacheUtils.getMenu(targetLocation);
+            if (menu == null) {
+                return itemStacks;
+            }
+            NetworkStorage storage = getNetworkStorage(menu);
+            if (storage != null) {
+                addLongAmount(itemStacks, storage.getItemStack(), storage.getAmount());
+            }
+            return itemStacks;
+        }
+
+        if (slimefunItem instanceof NetworksDrawer) {
+            StorageUnitData data = getCargoStorageUnitData(targetLocation);
+            if (data == null) {
+                return itemStacks;
+            }
+
+            for (ItemContainer itemContainer : data.getStoredItems()) {
+                addLongAmount(itemStacks, itemContainer.getSample(), itemContainer.getAmount());
+            }
+        }
+
+        return itemStacks;
+    }
+
+    @NotNull
+    public CompletableFuture<Map<ItemStack, Long>> getAllNetworkItemsLongTypeAsync() {
+        Set<Location> monitorTargets = new HashSet<>();
+        for (Location monitorLocation : new HashSet<>(this.monitors)) {
+            BlockFace face = NetworkDirectional.getSelectedFace(monitorLocation);
+            if (face == null) {
+                continue;
+            }
+
+            monitorTargets.add(monitorLocation.clone().add(face.getDirection()));
+        }
+
+        List<CompletableFuture<Map<ItemStack, Long>>> futures = new ArrayList<>();
+        for (Location targetLocation : monitorTargets) {
+            if (targetLocation.getWorld() == null) {
+                continue;
+            }
+            futures.add(
+                FoliaSupport.supplyRegion(targetLocation, () -> collectMonitorTargetItems(targetLocation))
+                    .exceptionally(throwable -> new HashMap<>())
+            );
+        }
+        for (Location location : new HashSet<>(this.advancedGreedyBlocks)) {
+            if (location.getWorld() == null) {
+                continue;
+            }
+            futures.add(
+                FoliaSupport.supplyRegion(location, () -> collectWithdrawMenuItems(location))
+                    .exceptionally(throwable -> new HashMap<>())
+            );
+        }
+        for (Location location : new HashSet<>(this.greedyBlocks)) {
+            if (location.getWorld() == null) {
+                continue;
+            }
+            futures.add(
+                FoliaSupport.supplyRegion(location, () -> collectWithdrawMenuItems(location))
+                    .exceptionally(throwable -> new HashMap<>())
+            );
+        }
+        for (Location location : new HashSet<>(this.crafters)) {
+            if (location.getWorld() == null) {
+                continue;
+            }
+            futures.add(
+                FoliaSupport.supplyRegion(location, () -> collectWithdrawMenuItems(location))
+                    .exceptionally(throwable -> new HashMap<>())
+            );
+        }
+        for (Location location : new HashSet<>(this.cells)) {
+            if (location.getWorld() == null) {
+                continue;
+            }
+            futures.add(
+                FoliaSupport.supplyRegion(location, () -> collectWithdrawMenuItems(location))
+                    .exceptionally(throwable -> new HashMap<>())
+            );
+        }
+
+        if (futures.isEmpty()) {
+            return CompletableFuture.completedFuture(new HashMap<>());
+        }
+
+        return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+            .thenApply(ignored -> {
+                Map<ItemStack, Long> merged = new HashMap<>();
+                for (CompletableFuture<Map<ItemStack, Long>> future : futures) {
+                    mergeLongAmounts(merged, future.join());
+                }
+                return merged;
+            });
+    }
+
+    @NotNull
+    public CompletableFuture<Boolean> containsAsync(@NotNull ItemStack itemStack) {
+        return containsAsync(new ItemRequest(itemStack, 1));
+    }
+
+    @NotNull
+    public CompletableFuture<Boolean> containsAsync(@NotNull ItemRequest request) {
+        return getAllNetworkItemsLongTypeAsync().thenApply(itemStacks -> {
+            long found = 0;
+            for (Map.Entry<ItemStack, Long> entry : itemStacks.entrySet()) {
+                if (!StackUtils.itemsMatch(request, entry.getKey())) {
+                    continue;
+                }
+
+                found += entry.getValue();
+                if (found >= request.getAmount()) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    }
+
+    @NotNull
+    public CompletableFuture<Integer> getAmountAsync(@NotNull ItemStack itemStack) {
+        return getAllNetworkItemsLongTypeAsync().thenApply(itemStacks -> {
+            long totalAmount = 0;
+            for (Map.Entry<ItemStack, Long> entry : itemStacks.entrySet()) {
+                if (StackUtils.itemsMatch(entry.getKey(), itemStack)) {
+                    totalAmount += entry.getValue();
+                }
+            }
+            return totalAmount > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) totalAmount;
+        });
+    }
+
+    @NotNull
+    public CompletableFuture<HashMap<ItemStack, Long>> getAmountAsync(@NotNull Set<ItemStack> itemStacks) {
+        return getAllNetworkItemsLongTypeAsync().thenApply(allItems -> {
+            HashMap<ItemStack, Long> totalAmounts = new HashMap<>();
+            for (ItemStack itemStack : itemStacks) {
+                long totalAmount = 0;
+                for (Map.Entry<ItemStack, Long> entry : allItems.entrySet()) {
+                    if (StackUtils.itemsMatch(entry.getKey(), itemStack)) {
+                        totalAmount += entry.getValue();
+                    }
+                }
+                if (totalAmount > 0) {
+                    totalAmounts.put(itemStack, totalAmount);
+                }
+            }
+            return totalAmounts;
+        });
+    }
+
+    @NotNull
+    public CompletableFuture<Map<ItemStack, Long>> getAllNetworkItemsAsync() {
+        return getAllNetworkItemsLongTypeAsync().thenApply(HashMap::new);
+    }
+
+    @NotNull
+    public CompletableFuture<ItemStack> requestItemAsync(@NotNull Location accessor, @NotNull ItemRequest request) {
+        return getItemStack0Async(accessor, request);
+    }
+
+    @NotNull
+    public CompletableFuture<ItemStack> requestItemAsync(@NotNull Location accessor, @NotNull ItemStack itemStack) {
+        return requestItemAsync(accessor, new ItemRequest(itemStack, itemStack.getAmount()));
+    }
+
+    @NotNull
+    public CompletableFuture<ItemStack> getItemStack0Async(@NotNull Location accessor, @NotNull ItemRequest request) {
+        if (request.getAmount() <= 0) {
+            FeedbackSendable.sendFeedback0(accessor, FeedbackType.ROOT_REQUEST_0);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        if (!allowAccessOutput(accessor)) {
+            FeedbackSendable.sendFeedback0(accessor, FeedbackType.ROOT_LIMITING_ACCESS_OUTPUT);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final ItemStack[] stackToReturn = new ItemStack[1];
+        final int[] remaining = new int[]{request.getAmount()};
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+
+        for (OutputSource source : getOutputSources()) {
+            chain = chain.thenCompose(ignored -> {
+                if (remaining[0] <= 0 || source.location().getWorld() == null) {
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                ItemRequest localRequest = new ItemRequest(request.getItemStack(), remaining[0]);
+                return FoliaSupport.supplyRegion(
+                        source.location(),
+                        () -> takeFromOutputSource(accessor, source, localRequest)
+                    )
+                    .exceptionally(throwable -> null)
+                    .thenAccept(fetched -> {
+                        if (fetched == null || fetched.getType() == Material.AIR) {
+                            return;
+                        }
+
+                        if (stackToReturn[0] == null) {
+                            stackToReturn[0] = fetched.clone();
+                        } else {
+                            stackToReturn[0].setAmount(stackToReturn[0].getAmount() + fetched.getAmount());
+                        }
+                        remaining[0] = Math.max(0, remaining[0] - fetched.getAmount());
+                    });
+            });
+        }
+
+        return chain.thenApply(ignored -> {
+            if (stackToReturn[0] == null || stackToReturn[0].getAmount() <= 0) {
+                return null;
+            }
+
+            request.receiveAmount(stackToReturn[0].getAmount());
+            uncontrolAccessOutput(accessor);
+            tryRecord(accessor, request);
+            return stackToReturn[0];
+        });
     }
 
     @NotNull
@@ -1626,6 +2063,38 @@ public class NetworkRoot extends NetworkNode {
     }
 
     @NotNull
+    public CompletableFuture<List<ItemStack>> getItemStacks0Async(
+        @NotNull Location location,
+        @NotNull List<ItemRequest> itemRequests) {
+        List<ItemStack> retrievedItems = new ArrayList<>();
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+        for (ItemRequest request : itemRequests) {
+            chain = chain.thenCompose(ignored -> getItemStack0Async(location, request).thenAccept(retrieved -> {
+                if (retrieved != null) {
+                    retrievedItems.add(retrieved);
+                }
+            }));
+        }
+        return chain.thenApply(ignored -> retrievedItems);
+    }
+
+    @NotNull
+    public CompletableFuture<List<ItemStack>> requestItemsAsync(
+        @NotNull Location accessor,
+        @NotNull List<ItemRequest> itemRequests) {
+        return getItemStacks0Async(accessor, itemRequests);
+    }
+
+    @NotNull
+    public CompletableFuture<List<ItemStack>> getItemStacksAsync(@NotNull List<ItemRequest> itemRequests) {
+        Location accessor = this.controller;
+        if (accessor == null) {
+            return CompletableFuture.completedFuture(List.of());
+        }
+        return getItemStacks0Async(accessor, itemRequests);
+    }
+
+    @NotNull
     public List<BarrelIdentity> getBarrels(
         @NotNull Predicate<BarrelIdentity> filter,
         NetworkRootLocateStorageEvent.Strategy strategy,
@@ -2005,6 +2474,15 @@ public class NetworkRoot extends NetworkNode {
         return true;
     }
 
+    public @NotNull CompletableFuture<Boolean> refreshRootItemsAsync() {
+        final Location ownerLocation = this.controller != null ? this.controller : this.nodePosition;
+        if (ownerLocation.getWorld() == null) {
+            return CompletableFuture.completedFuture(refreshRootItems());
+        }
+
+        return FoliaSupport.supplyRegion(ownerLocation, this::refreshRootItems);
+    }
+
     @Nullable
     public BarrelIdentity accessInputAbleBarrel(Location barrelLocation) {
         return getMapInputAbleBarrels().get(barrelLocation);
@@ -2045,6 +2523,20 @@ public class NetworkRoot extends NetworkNode {
     public ItemStack requestItem(@NotNull Location accessor, @NotNull ItemStack itemStack) {
         requireOwningRegion();
         return requestItem(accessor, new ItemRequest(itemStack, itemStack.getAmount()));
+    }
+
+    @NotNull
+    public CompletableFuture<ItemStack> requestItemAsync(@NotNull ItemRequest request) {
+        Location accessor = this.controller;
+        if (accessor == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return getItemStack0Async(accessor, request);
+    }
+
+    @NotNull
+    public CompletableFuture<ItemStack> requestItemAsync(@NotNull ItemStack itemStack) {
+        return requestItemAsync(new ItemRequest(itemStack, itemStack.getAmount()));
     }
 
     public void tryRecord(@NotNull Location accessor, @NotNull ItemRequest request) {
@@ -2412,6 +2904,20 @@ public class NetworkRoot extends NetworkNode {
     public void addItem(@NotNull Location accessor, @NotNull ItemStack incoming) {
         requireOwningRegion();
         addItemStack0(accessor, incoming);
+    }
+
+    @NotNull
+    public CompletableFuture<Void> addItemStack0Async(@NotNull Location accessor, @NotNull ItemStack incoming) {
+        final Location ownerLocation = this.controller != null ? this.controller : this.nodePosition;
+        if (ownerLocation.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(ownerLocation)) {
+            addItemStack0(accessor, incoming);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return FoliaSupport.supplyRegion(ownerLocation, () -> {
+            addItemStack0(accessor, incoming);
+            return null;
+        });
     }
 
     public void tryRecord(@NotNull Location accessor, @Nullable ItemStack before, int after) {

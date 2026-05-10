@@ -33,6 +33,18 @@ public class DueMachineConfigurator extends SpecialSlimefunItem {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Block block, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(block)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(block.getLocation(), runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public DueMachineConfigurator(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -44,30 +56,27 @@ public class DueMachineConfigurator extends SpecialSlimefunItem {
             final Optional<Block> optional = e.getClickedBlock();
             if (optional.isPresent()) {
                 final Block block = optional.get();
-                if (!canDirectlyAccess(block)) {
-                    player.sendMessage("§cFolia 下无法直接配置另一个 region 中的方块");
-                    e.cancel();
-                    return;
-                }
-                final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+                final boolean sneaking = player.isSneaking();
+                runAtTargetRegion(block, () -> {
+                    final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+                    if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)) {
+                        if (slimefunItem instanceof DueMachine dueMachine) {
+                            final BlockMenu blockMenu = StorageCacheUtils.getMenu(block.getLocation());
+                            if (blockMenu == null) {
+                                return;
+                            }
 
-                if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)) {
-                    if (slimefunItem instanceof DueMachine dueMachine) {
-                        final BlockMenu blockMenu = StorageCacheUtils.getMenu(block.getLocation());
-                        if (blockMenu == null) {
-                            return;
-                        }
-
-                        if (player.isSneaking()) {
-                            setConfigurator(dueMachine, e.getItem(), blockMenu, player);
+                            if (sneaking) {
+                                setConfigurator(dueMachine, e.getItem(), blockMenu, player);
+                            } else {
+                                applyConfig(dueMachine, e.getItem(), blockMenu, player);
+                            }
                         } else {
-                            applyConfig(dueMachine, e.getItem(), blockMenu, player);
+                            sendPlayerMessage(player,
+                                Lang.getString("messages.unsupported-operation.configurator.not_a_pasteable_block"));
                         }
-                    } else {
-                        player.sendMessage(
-                            Lang.getString("messages.unsupported-operation.configurator.not_a_pasteable_block"));
                     }
-                }
+                });
             }
             e.cancel();
         });
@@ -80,56 +89,77 @@ public class DueMachineConfigurator extends SpecialSlimefunItem {
         @NotNull Player player) {
         final ItemMeta itemMeta = itemStack.getItemMeta();
         final ItemStack[] templateStacks = DataTypeMethods.getCustom(itemMeta, Keys.ITEM, DataType.ITEM_STACK_ARRAY);
-
-        dueMachine.getItemSlots();
-        for (int slot : dueMachine.getItemSlots()) {
-            final ItemStack stackToDrop = blockMenu.getItemInSlot(slot);
-            if (stackToDrop != null && stackToDrop.getType() != Material.AIR) {
-                blockMenu.getLocation().getWorld().dropItem(blockMenu.getLocation(), stackToDrop.clone());
-                stackToDrop.setAmount(0);
-            }
+        if (templateStacks == null) {
+            sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.configurator.no_item_configured"));
+            return;
         }
 
-        if (templateStacks != null) {
+        final ItemStack[] providedStacks = new ItemStack[dueMachine.getItemSlots().length];
+        final boolean[] worked = new boolean[dueMachine.getItemSlots().length];
+        FoliaSupport.runPlayer(player, () -> {
             int i = 0;
             for (ItemStack templateStack : templateStacks) {
                 if (templateStack != null && templateStack.getType() != Material.AIR) {
-                    boolean worked = false;
                     int need = templateStack.getAmount();
                     for (ItemStack stack : player.getInventory()) {
-                        if (StackUtils.itemsMatch(stack, templateStack)) {
-                            int handled = Math.max(Math.min(need, stack.getAmount()), 0);
-                            if (handled == 0) {
-                                continue;
-                            }
-                            final ItemStack stackClone = StackUtils.getAsQuantity(stack, handled);
-                            stack.setAmount(stack.getAmount() - handled);
-                            ItemStack exist = blockMenu.getItemInSlot(dueMachine.getItemSlots()[i]);
-                            if (exist == null || exist.getType() == Material.AIR) {
-                                blockMenu.replaceExistingItem(dueMachine.getItemSlots()[i], stackClone);
-                            } else {
-                                exist.setAmount(exist.getAmount() + handled);
-                            }
-                            need -= handled;
-                            worked = true;
-                            if (need <= 0) {
-                                break;
-                            }
+                        if (stack == null || stack.getType() == Material.AIR || !StackUtils.itemsMatch(stack, templateStack)) {
+                            continue;
                         }
-                    }
-                    if (!worked) {
-                        player.sendMessage(String.format(
-                            Lang.getString("messages.unsupported-operation.configurator.not_enough_items"), i));
-                    } else {
-                        player.sendMessage(String.format(
-                            Lang.getString("messages.completed-operation.configurator.pasted_item"), i));
+
+                        int handled = Math.max(Math.min(need, stack.getAmount()), 0);
+                        if (handled == 0) {
+                            continue;
+                        }
+
+                        final ItemStack stackClone = StackUtils.getAsQuantity(stack, handled);
+                        stack.setAmount(stack.getAmount() - handled);
+                        if (providedStacks[i] == null || providedStacks[i].getType() == Material.AIR) {
+                            providedStacks[i] = stackClone;
+                        } else {
+                            providedStacks[i].setAmount(providedStacks[i].getAmount() + handled);
+                        }
+                        need -= handled;
+                        worked[i] = true;
+                        if (need <= 0) {
+                            break;
+                        }
                     }
                 }
                 i++;
             }
-        } else {
-            player.sendMessage(Lang.getString("messages.unsupported-operation.configurator.no_item_configured"));
-        }
+
+            FoliaSupport.runRegion(blockMenu.getLocation(), () -> {
+                for (int slot : dueMachine.getItemSlots()) {
+                    final ItemStack stackToDrop = blockMenu.getItemInSlot(slot);
+                    if (stackToDrop != null && stackToDrop.getType() != Material.AIR) {
+                        blockMenu.getLocation().getWorld().dropItem(blockMenu.getLocation(), stackToDrop.clone());
+                        stackToDrop.setAmount(0);
+                    }
+                }
+
+                for (int index = 0; index < dueMachine.getItemSlots().length; index++) {
+                    final ItemStack provided = providedStacks[index];
+                    if (provided != null && provided.getType() != Material.AIR) {
+                        blockMenu.replaceExistingItem(dueMachine.getItemSlots()[index], provided);
+                    }
+                }
+
+                FoliaSupport.runPlayer(player, () -> {
+                    for (int index = 0; index < dueMachine.getItemSlots().length; index++) {
+                        if (templateStacks[index] == null || templateStacks[index].getType() == Material.AIR) {
+                            continue;
+                        }
+                        if (!worked[index]) {
+                            player.sendMessage(String.format(
+                                Lang.getString("messages.unsupported-operation.configurator.not_enough_items"), index));
+                        } else {
+                            player.sendMessage(String.format(
+                                Lang.getString("messages.completed-operation.configurator.pasted_item"), index));
+                        }
+                    }
+                });
+            });
+        });
     }
 
     private void setConfigurator(
@@ -156,6 +186,6 @@ public class DueMachineConfigurator extends SpecialSlimefunItem {
         }
 
         itemStack.setItemMeta(itemMeta);
-        player.sendMessage(Lang.getString("messages.completed-operation.configurator.copied"));
+        sendPlayerMessage(player, Lang.getString("messages.completed-operation.configurator.copied"));
     }
 }

@@ -36,6 +36,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -46,6 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @SuppressWarnings("DuplicatedCode")
 public class SmartGrabber extends SpecialSlimefunItem implements AdminDebuggable {
     private static final Map<Location, BlockFace> DIRECTIONS = new ConcurrentHashMap<>();
+    private static final Set<Location> PENDING_GRABS = ConcurrentHashMap.newKeySet();
     private static final Set<BlockFace> VALID_FACES =
         EnumSet.of(BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST);
 
@@ -138,34 +140,58 @@ public class SmartGrabber extends SpecialSlimefunItem implements AdminDebuggable
                 final int[] slots = targetMenu
                     .getPreset()
                     .getSlotsAccessedByItemTransport(targetMenu, ItemTransportFlow.WITHDRAW, null);
-                int limit = getLimitQuantity();
-                if (slots.length > 0) {
-                    final ItemStack delta = targetMenu.getItemInSlot(slots[0]);
-                    if (delta != null && delta.getType() != Material.AIR) {
-                        for (int slot : slots) {
-                            ItemStack item = targetMenu.getItemInSlot(slot);
-                            if (item != null && item.getType() != Material.AIR) {
-                                final int exceptedReceive = Math.min(item.getAmount(), limit);
-                                final ItemStack clone = StackUtils.getAsQuantity(item, exceptedReceive);
-                                root.addItemStack0(thisBlock.getLocation(), clone);
-                                item.setAmount(item.getAmount() - (exceptedReceive - clone.getAmount()));
-                                limit -= exceptedReceive - clone.getAmount();
-                                if (limit <= 0) {
-                                    break;
-                                }
-                            }
-                        }
-                    }
+
+                if (!PENDING_GRABS.add(thisBlock.getLocation())) {
+                    return;
                 }
+
+                pushSlotsAsync(thisBlock.getLocation(), targetMenu, root, slots, 0, getLimitQuantity()).whenComplete((ignored, throwable) ->
+                    FoliaSupport.runRegion(thisBlock.getLocation(), () -> {
+                        PENDING_GRABS.remove(thisBlock.getLocation());
+                        sendFeedback(thisBlock.getLocation(), FeedbackType.WORKING);
+                    }));
             }
             else {
                 sendFeedback(thisBlock.getLocation(), FeedbackType.NO_TARGET_BLOCK);
                 return;
             }
-            sendFeedback(thisBlock.getLocation(), FeedbackType.WORKING);
         } else {
             sendFeedback(thisBlock.getLocation(), FeedbackType.NO_NETWORK_FOUND);
         }
+    }
+
+    private CompletableFuture<Void> pushSlotsAsync(
+        @NotNull Location accessor,
+        @NotNull BlockMenu targetMenu,
+        @NotNull NetworkRoot root,
+        int @NotNull [] slots,
+        int index,
+        int limit) {
+        if (limit <= 0 || index >= slots.length) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final int slot = slots[index];
+        final ItemStack item = targetMenu.getItemInSlot(slot);
+        if (item == null || item.getType() == Material.AIR) {
+            return pushSlotsAsync(accessor, targetMenu, root, slots, index + 1, limit);
+        }
+
+        final int expectedReceive = Math.min(item.getAmount(), limit);
+        final ItemStack transfer = StackUtils.getAsQuantity(item, expectedReceive);
+        final int originalAmount = transfer.getAmount();
+        return root.addItemStack0Async(accessor, transfer)
+            .thenCompose(ignored -> FoliaSupport.supplyRegion(targetMenu.getLocation(), () -> {
+                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                if (moved > 0) {
+                    final ItemStack live = targetMenu.getItemInSlot(slot);
+                    if (live != null && live.getType() != Material.AIR) {
+                        live.setAmount(Math.max(0, live.getAmount() - moved));
+                    }
+                }
+                return moved;
+            }))
+            .thenCompose(moved -> pushSlotsAsync(accessor, targetMenu, root, slots, index + 1, limit - moved));
     }
 
     public int getLimitQuantity() {

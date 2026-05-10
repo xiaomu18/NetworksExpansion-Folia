@@ -22,6 +22,18 @@ public class NetworkCrayon extends SpecialSlimefunItem {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Block block, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(block)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(block.getLocation(), runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public NetworkCrayon(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -33,16 +45,15 @@ public class NetworkCrayon extends SpecialSlimefunItem {
             if (optional.isPresent()) {
                 final Block block = optional.get();
                 final Player player = e.getPlayer();
-                if (!canDirectlyAccess(block)) {
-                    player.sendMessage("§cFolia 下无法直接操作另一个 region 中的控制器");
-                    e.cancel();
-                    return;
-                }
-                final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
-                if (slimefunItem instanceof NetworkController) {
-                    toggleCrayon(block, player);
-                    e.cancel();
-                }
+                e.cancel();
+                runAtTargetRegion(block, () -> {
+                    final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+                    if (slimefunItem instanceof NetworkController) {
+                        toggleCrayon(block, player);
+                    } else {
+                        sendPlayerMessage(player, "§c目标方块不是网络控制器");
+                    }
+                });
             }
         });
     }

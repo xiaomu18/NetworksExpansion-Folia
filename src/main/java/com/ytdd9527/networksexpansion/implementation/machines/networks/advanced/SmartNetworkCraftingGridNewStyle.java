@@ -17,6 +17,7 @@ import com.balugaq.netex.utils.InventoryUtil;
 import com.balugaq.netex.utils.Lang;
 import com.ytdd9527.networksexpansion.core.items.machines.AbstractGridNewStyle;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.events.NetworkCraftEvent;
@@ -52,6 +53,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 @NullMarked
@@ -88,6 +90,7 @@ public class SmartNetworkCraftingGridNewStyle extends AbstractGridNewStyle imple
         18, 19, 20
     };
     private static final Map<Location, GridCache> CACHE_MAP = new ConcurrentHashMap<>();
+    private static final Map<Location, Boolean> PENDING_CRAFTS = new ConcurrentHashMap<>();
     public static int THRESHOLD = 4096;
     private final Keybinds smartOutsideKeybinds = Keybinds.create(Keys.newKey("smart-outside-keybinds"), it -> {
             it.usableKeybinds(
@@ -105,20 +108,8 @@ public class SmartNetworkCraftingGridNewStyle extends AbstractGridNewStyle imple
                 }
 
                 NetworkRoot root = definition.getNode().getRoot();
-                label:
-                {
-                    if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) break label;
-
-                    // 1. try store back into networks
-                    root.addItemStack(stack);
-                    if (stack.getAmount() == 0) break label;
-
-                    // 2. try store into output slots
-                    BlockMenuUtil.pushItem(menu, stack, OUTPUT_SLOTS);
-                    if (stack.getAmount() == 0) break label;
-
-                    // 3. try store into ingredients slots
-                    BlockMenuUtil.pushItem(menu, stack, getIngredientSlots());
+                if (stack != null && stack.getType() != Material.AIR && stack.getAmount() > 0) {
+                    storePlayerStackAsync(menu, root, p, stack);
                 }
                 return ActionResult.of(MultiActionHandle.BREAK, false);
             });
@@ -256,20 +247,7 @@ public class SmartNetworkCraftingGridNewStyle extends AbstractGridNewStyle imple
                     NodeDefinition definition = NetworkStorage.getNode(menu.getLocation());
                     if (definition == null || definition.getNode() == null) return false;
                     NetworkRoot root = definition.getNode().getRoot();
-                    for (int slot : getIngredientSlots()) {
-                        ItemStack stack = menu.getItemInSlot(slot);
-                        label:
-                        {
-                            if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) break label;
-
-                            // 1. try store back into networks
-                            root.addItemStack(stack);
-                            if (stack.getAmount() == 0) break label;
-
-                            // 2. try store into output slots
-                            BlockMenuUtil.pushItem(menu, stack, OUTPUT_SLOTS);
-                        }
-                    }
+                    returnIngredientSlotsAsync(menu, root, 0);
                     return false;
                 });
                 menu.addItem(RETURN_OUTPUT_SLOT, Icon.RETURN_OUTPUT);
@@ -277,17 +255,7 @@ public class SmartNetworkCraftingGridNewStyle extends AbstractGridNewStyle imple
                     NodeDefinition definition = NetworkStorage.getNode(menu.getLocation());
                     if (definition == null || definition.getNode() == null) return false;
                     NetworkRoot root = definition.getNode().getRoot();
-                    for (int slot : OUTPUT_SLOTS) {
-                        ItemStack stack = menu.getItemInSlot(slot);
-                        label:
-                        {
-                            if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) break label;
-
-                            // 1. try store back into networks
-                            root.addItemStack(stack);
-                        }
-                    }
-
+                    returnOutputSlotsAsync(menu, root, 0);
                     return false;
                 });
 
@@ -337,8 +305,9 @@ public class SmartNetworkCraftingGridNewStyle extends AbstractGridNewStyle imple
 
     @SuppressWarnings({"deprecation", "DataFlowIssue"})
     private synchronized void tryCraft(BlockMenu menu, Player player, ClickAction action) {
+        final Location menuLocation = menu.getLocation();
         if (player.getWorld().getNearbyEntities(player.getLocation(), 5, 5, 5).size() > THRESHOLD) {
-            sendFeedback(menu.getLocation(), FeedbackType.TOO_MANY_ENTITIES);
+            sendFeedback(menuLocation, FeedbackType.TOO_MANY_ENTITIES);
             return;
         }
 
@@ -391,69 +360,181 @@ public class SmartNetworkCraftingGridNewStyle extends AbstractGridNewStyle imple
             return;
         }
 
-        for (int k = 0; k < times; k++) {
-            // check if it has enough input
-            for (ItemStack template : templates) {
-                if (template != null && !root.contains(template)) {
-                    return;
-                }
-            }
-
-            // find enough item, consume
-            List<ItemStack> got = new ArrayList<>();
-            for (ItemStack template : templates) {
-                if (template == null) continue;
-
-                ItemStack item = root.getItemStack0(menu.getLocation(), new ItemRequest(template, 1));
-                if (item == null || item.getType() == Material.AIR) {
-                    // return items
-                    for (ItemStack i2 : got) {
-                        // 1. try store back into networks
-                        root.addItemStack(crafted);
-                    }
-                    return;
-                } else {
-                    got.add(item);
-                }
-            }
-
-            // fire craft event
-            NetworkCraftEvent event = new NetworkCraftEvent(player, this, templates, crafted.clone());
-            Bukkit.getPluginManager().callEvent(event);
-            if (event.isCancelled()) {
-                return;
-            }
-            ItemStack c2 = event.getOutput();
-
-            // Push item
-            if (c2 != null) {
-                label:
-                {
-                    if (c2 == null || c2.getType() == Material.AIR || c2.getAmount() <= 0) break label;
-
-                    // 1. try store into output slots
-                    BlockMenuUtil.pushItem(menu, c2, OUTPUT_SLOTS);
-                    if (c2.getAmount() == 0) break label;
-
-                    // 2. try store back into networks
-                    root.addItemStack(c2);
-                    if (c2.getAmount() == 0) break label;
-
-                    // 3. try store into ingredients slots
-                    BlockMenuUtil.pushItem(menu, c2, getIngredientSlots());
-                    if (c2.getAmount() == 0) break label;
-
-                    // 4. try store into player inventory
-                    InventoryUtil.addItem(player, c2);
-                    if (c2.getAmount() == 0) break label;
-
-                    // 5. try drop in the world
-                    player.getWorld().dropItem(player.getLocation(), c2);
-                }
-            }
-
-            root.refreshRootItems();
+        if (PENDING_CRAFTS.putIfAbsent(menuLocation, Boolean.TRUE) != null) {
+            return;
         }
+
+        final ItemStack craftedTemplate = crafted.clone();
+        craftTimesAsync(menu, player, root, templates, craftedTemplate, times).whenComplete((craftedTimes, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> {
+                PENDING_CRAFTS.remove(menuLocation);
+                updateDisplay(menu);
+                if (craftedTimes != null && craftedTimes > 0) {
+                    sendFeedback(menuLocation, FeedbackType.WORKING);
+                }
+            }));
+    }
+
+    private CompletableFuture<Integer> craftTimesAsync(
+        @NotNull BlockMenu menu,
+        @NotNull Player player,
+        @NotNull NetworkRoot root,
+        ItemStack @NotNull [] templates,
+        @NotNull ItemStack craftedTemplate,
+        int remainingTimes) {
+        if (remainingTimes <= 0) {
+            return CompletableFuture.completedFuture(0);
+        }
+
+        final Location menuLocation = menu.getLocation();
+        return extractIngredientsAsync(root, menuLocation, templates, 0, new ArrayList<>()).thenCompose(got -> {
+            if (got == null) {
+                return CompletableFuture.completedFuture(0);
+            }
+
+            return FoliaSupport.supplyRegion(menuLocation, () -> {
+                NetworkCraftEvent event = new NetworkCraftEvent(player, this, templates, craftedTemplate.clone());
+                Bukkit.getPluginManager().callEvent(event);
+                if (event.isCancelled()) {
+                    for (ItemStack item : got) {
+                        root.addItemStack0Async(menuLocation, item);
+                    }
+                    return false;
+                }
+
+                ItemStack output = event.getOutput();
+                if (output != null && output.getType() != Material.AIR && output.getAmount() > 0) {
+                    BlockMenuUtil.pushItem(menu, output, OUTPUT_SLOTS);
+                    if (output.getAmount() > 0) {
+                        root.addItemStack0Async(menuLocation, output);
+                    }
+                    if (output.getAmount() > 0) {
+                        BlockMenuUtil.pushItem(menu, output, getIngredientSlots());
+                    }
+                    if (output.getAmount() > 0) {
+                        final ItemStack playerRemainder = output.clone();
+                        FoliaSupport.runPlayer(player, () -> {
+                            InventoryUtil.addItem(player, playerRemainder);
+                            if (playerRemainder.getAmount() > 0) {
+                                player.getWorld().dropItem(player.getLocation(), playerRemainder);
+                            }
+                        });
+                    }
+                }
+
+                return true;
+            }).thenCompose(success -> {
+                if (!Boolean.TRUE.equals(success)) {
+                    return CompletableFuture.completedFuture(0);
+                }
+                return root.refreshRootItemsAsync().thenCompose(refreshed -> {
+                    if (!Boolean.TRUE.equals(refreshed)) {
+                        return CompletableFuture.completedFuture(0);
+                    }
+                    return craftTimesAsync(menu, player, root, templates, craftedTemplate, remainingTimes - 1)
+                        .thenApply(result -> result + 1);
+                });
+            });
+        });
+    }
+
+    private CompletableFuture<List<ItemStack>> extractIngredientsAsync(
+        @NotNull NetworkRoot root,
+        @NotNull Location menuLocation,
+        ItemStack @NotNull [] templates,
+        int index,
+        @NotNull List<ItemStack> fetchedItems) {
+        if (index >= templates.length) {
+            return CompletableFuture.completedFuture(fetchedItems);
+        }
+
+        final ItemStack template = templates[index];
+        if (template == null) {
+            return extractIngredientsAsync(root, menuLocation, templates, index + 1, fetchedItems);
+        }
+
+        return root.getItemStack0Async(menuLocation, new ItemRequest(template, 1)).thenCompose(item -> {
+            if (item == null || item.getType() == Material.AIR) {
+                return FoliaSupport.supplyRegion(menuLocation, () -> {
+                    for (ItemStack fetched : fetchedItems) {
+                        root.addItemStack0Async(menuLocation, fetched);
+                    }
+                    return (List<ItemStack>) null;
+                });
+            }
+
+            fetchedItems.add(item);
+            return extractIngredientsAsync(root, menuLocation, templates, index + 1, fetchedItems);
+        });
+    }
+
+    private CompletableFuture<Void> storePlayerStackAsync(
+        @NotNull BlockMenu menu,
+        @NotNull NetworkRoot root,
+        @NotNull Player player,
+        @NotNull ItemStack source) {
+        final ItemStack transfer = source.clone();
+        final Location menuLocation = menu.getLocation();
+        return root.addItemStack0Async(menuLocation, transfer)
+            .thenCompose(ignored -> FoliaSupport.supplyRegion(menuLocation, () -> {
+                if (transfer.getAmount() > 0) {
+                    BlockMenuUtil.pushItem(menu, transfer, OUTPUT_SLOTS);
+                }
+                if (transfer.getAmount() > 0) {
+                    BlockMenuUtil.pushItem(menu, transfer, getIngredientSlots());
+                }
+                return transfer.getAmount();
+            }))
+            .thenAccept(remaining -> FoliaSupport.runPlayer(player, () -> source.setAmount(Math.max(0, remaining))));
+    }
+
+    private CompletableFuture<Void> returnIngredientSlotsAsync(
+        @NotNull BlockMenu menu,
+        @NotNull NetworkRoot root,
+        int index) {
+        if (index >= getIngredientSlots().length) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return returnMenuSlotToNetworkAsync(menu, root, getIngredientSlots()[index], OUTPUT_SLOTS)
+            .thenCompose(ignored -> returnIngredientSlotsAsync(menu, root, index + 1));
+    }
+
+    private CompletableFuture<Void> returnOutputSlotsAsync(
+        @NotNull BlockMenu menu,
+        @NotNull NetworkRoot root,
+        int index) {
+        if (index >= OUTPUT_SLOTS.length) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return returnMenuSlotToNetworkAsync(menu, root, OUTPUT_SLOTS[index])
+            .thenCompose(ignored -> returnOutputSlotsAsync(menu, root, index + 1));
+    }
+
+    private CompletableFuture<Void> returnMenuSlotToNetworkAsync(
+        @NotNull BlockMenu menu,
+        @NotNull NetworkRoot root,
+        int slot,
+        int @NotNull ... overflowSlots) {
+        final ItemStack stack = menu.getItemInSlot(slot);
+        if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final ItemStack transfer = stack.clone();
+        final Location menuLocation = menu.getLocation();
+        return root.addItemStack0Async(menuLocation, transfer).thenCompose(ignored -> FoliaSupport.supplyRegion(menuLocation, () -> {
+            if (transfer.getAmount() > 0 && overflowSlots.length > 0) {
+                BlockMenuUtil.pushItem(menu, transfer, overflowSlots);
+            }
+
+            final ItemStack live = menu.getItemInSlot(slot);
+            if (live != null && live.getType() != Material.AIR && StackUtils.itemsMatch(live, transfer, true, false)) {
+                live.setAmount(Math.max(0, transfer.getAmount()));
+            }
+            return null;
+        }));
     }
 
     public int[] getIngredientSlots() {

@@ -28,6 +28,18 @@ public class StatusViewer extends SpecialSlimefunItem {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Location location, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(location.getBlock())) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(location, runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public StatusViewer(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -46,42 +58,39 @@ public class StatusViewer extends SpecialSlimefunItem {
         if (optional.isPresent()) {
             final Block block = optional.get();
             final Player player = e.getPlayer();
-            if (!canDirectlyAccess(block)) {
-                player.sendMessage("§cFolia 下无法直接查看另一个 region 中的方块状态");
-                e.cancel();
-                return;
-            }
-            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
             final Location location = block.getLocation();
-            if (slimefunItem != null) {
-                if (FeedbackSendable.hasSubscribed(player, location)) {
-                    FeedbackSendable.unsubscribe(player, location);
-                    player.sendMessage(String.format(
-                        Lang.getString("messages.completed-operation.status_viewer.unsubscribed"),
-                        LocationUtil.humanizeBlock(location)));
-                } else {
-                    FeedbackSendable.subscribe(player, location);
-                    if (slimefunItem instanceof NetworkObject) {
-                        player.sendMessage(
-                            Lang.getString("messages.completed-operation.status_viewer.is_networks_object"));
-                        final NodeDefinition definition = NetworkStorage.getNode(location);
-                        if (definition != null && definition.getNode() != null) {
-                            player.sendMessage(
-                                Lang.getString("messages.completed-operation.status_viewer.connected_to_network"));
-                        } else {
-                            player.sendMessage(Lang.getString(
-                                "messages.completed-operation.status_viewer.not_connected_to_network"));
-                        }
+            runAtTargetRegion(location, () -> {
+                final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(location);
+                if (slimefunItem != null) {
+                    if (FeedbackSendable.hasSubscribed(player, location)) {
+                        FeedbackSendable.unsubscribe(player, location);
+                        sendPlayerMessage(player, String.format(
+                            Lang.getString("messages.completed-operation.status_viewer.unsubscribed"),
+                            LocationUtil.humanizeBlock(location)));
                     } else {
-                        player.sendMessage(
-                            Lang.getString("messages.completed-operation.status_viewer.not_networks_object"));
+                        FeedbackSendable.subscribe(player, location);
+                        if (slimefunItem instanceof NetworkObject) {
+                            sendPlayerMessage(player,
+                                Lang.getString("messages.completed-operation.status_viewer.is_networks_object"));
+                            final NodeDefinition definition = NetworkStorage.getNode(location);
+                            if (definition != null && definition.getNode() != null) {
+                                sendPlayerMessage(player,
+                                    Lang.getString("messages.completed-operation.status_viewer.connected_to_network"));
+                            } else {
+                                sendPlayerMessage(player, Lang.getString(
+                                    "messages.completed-operation.status_viewer.not_connected_to_network"));
+                            }
+                        } else {
+                            sendPlayerMessage(player,
+                                Lang.getString("messages.completed-operation.status_viewer.not_networks_object"));
+                        }
+                        sendPlayerMessage(player, String.format(
+                            Lang.getString("messages.completed-operation.status_viewer.subscribed"),
+                            LocationUtil.humanizeBlock(location)));
                     }
-                    player.sendMessage(String.format(
-                        Lang.getString("messages.completed-operation.status_viewer.subscribed"),
-                        LocationUtil.humanizeBlock(location)));
                 }
-                e.cancel();
-            }
+            });
+            e.cancel();
         }
     }
 }

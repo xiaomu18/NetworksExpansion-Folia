@@ -4,6 +4,7 @@ import com.balugaq.netex.api.enums.FeedbackType;
 import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -30,6 +31,8 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -42,6 +45,7 @@ public class AdvancedImport extends NetworkObject implements RecipeDisplayItem {
         36, 37, 38, 39, 40, 41, 42, 43, 44,
         45, 46, 47, 48, 49, 50, 51, 52, 53
     };
+    private static final Set<org.bukkit.Location> PENDING_IMPORTS = ConcurrentHashMap.newKeySet();
     private final @NotNull ItemSetting<Integer> tickRate;
 
     public AdvancedImport(
@@ -83,23 +87,53 @@ public class AdvancedImport extends NetworkObject implements RecipeDisplayItem {
     }
 
     private void tryAddItem(@NotNull BlockMenu blockMenu) {
+        final org.bukkit.Location menuLocation = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
         if (definition == null || definition.getNode() == null) {
             return;
         }
 
-        final NetworkRoot root = definition.getNode().getRoot();
-
-        for (int inputSlot : INPUT_SLOTS) {
-            final ItemStack itemStack = blockMenu.getItemInSlot(inputSlot);
-
-            if (itemStack == null || itemStack.getType() == Material.AIR) {
-                continue;
-            }
-            root.addItemStack0(blockMenu.getLocation(), itemStack);
+        if (!PENDING_IMPORTS.add(menuLocation)) {
+            return;
         }
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+
+        final NetworkRoot root = definition.getNode().getRoot();
+        pushInputsAsync(blockMenu, root, 0).whenComplete((ignored, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> {
+                PENDING_IMPORTS.remove(menuLocation);
+                sendFeedback(menuLocation, FeedbackType.WORKING);
+            }));
+    }
+
+    private CompletableFuture<Void> pushInputsAsync(
+        @NotNull BlockMenu blockMenu,
+        @NotNull NetworkRoot root,
+        int index) {
+        if (index >= INPUT_SLOTS.length) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final int slot = INPUT_SLOTS[index];
+        final ItemStack current = blockMenu.getItemInSlot(slot);
+        if (current == null || current.getType() == Material.AIR) {
+            return pushInputsAsync(blockMenu, root, index + 1);
+        }
+
+        final ItemStack transfer = current.clone();
+        final int originalAmount = transfer.getAmount();
+        return root.addItemStack0Async(blockMenu.getLocation(), transfer)
+            .thenCompose(ignored -> FoliaSupport.supplyRegion(blockMenu.getLocation(), () -> {
+                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                if (moved > 0) {
+                    final ItemStack live = blockMenu.getItemInSlot(slot);
+                    if (live != null && live.getType() != Material.AIR) {
+                        live.setAmount(Math.max(0, live.getAmount() - moved));
+                    }
+                }
+                return null;
+            }))
+            .thenCompose(ignored -> pushInputsAsync(blockMenu, root, index + 1));
     }
 
     @Override

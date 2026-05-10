@@ -4,6 +4,7 @@ import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.api.helpers.SupportedCraftingTableRecipes;
 import com.balugaq.netex.utils.BlockMenuUtil;
 import com.balugaq.netex.utils.Lang;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.events.NetworkCraftEvent;
 import io.github.sefiraat.networks.network.GridItemRequest;
@@ -29,6 +30,7 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
@@ -210,7 +212,7 @@ public class NetworkCraftingGrid extends AbstractGrid {
     private void tryCraft(@NotNull BlockMenu menu, @NotNull Player player) {
         // Get node and, if it doesn't exist - escape
         final NodeDefinition definition = NetworkStorage.getNode(menu.getLocation());
-        if (definition.getNode() == null) {
+        if (definition == null || definition.getNode() == null) {
             return;
         }
 
@@ -266,44 +268,83 @@ public class NetworkCraftingGrid extends AbstractGrid {
         }
 
         NetworkRoot root = definition.getNode().getRoot();
-        root.refreshRootItems();
-
-        // Let's clear down all the items
-        for (int recipeSlot : CRAFT_ITEMS) {
-            final ItemStack itemInSlot = menu.getItemInSlot(recipeSlot);
-            if (itemInSlot != null) {
-                // Grab a clone for potential retrieval
-                final ItemStack itemInSlotClone = itemInSlot.clone();
-                itemInSlotClone.setAmount(1);
-                BlockMenuUtil.consumeItem(menu, recipeSlot, 1, true);
-                // We have consumed a slot item and now the slot is empty - try to refill
-                if (menu.getItemInSlot(recipeSlot) == null) {
-                    // Process item request
-                    final GridItemRequest request = new GridItemRequest(itemInSlotClone, 1, player);
-                    final ItemStack requestingStack = root.getItemStack(request);
-                    if (requestingStack != null) {
-                        menu.replaceExistingItem(recipeSlot, requestingStack);
-                    }
-                }
-            }
-        }
+        root.refreshRootItemsAsync().thenCompose(success ->
+            Boolean.TRUE.equals(success)
+                ? consumeAndRefillAsync(menu, root, player, 0)
+                : CompletableFuture.completedFuture(null));
     }
 
     private void tryReturnItems(@NotNull BlockMenu menu) {
         // Get node and, if it doesn't exist - escape
         final NodeDefinition definition = NetworkStorage.getNode(menu.getLocation());
 
-        if (definition.getNode() == null) {
+        if (definition == null || definition.getNode() == null) {
             return;
         }
 
-        for (int recipeSlot : CRAFT_ITEMS) {
-            final ItemStack stack = menu.getItemInSlot(recipeSlot);
+        returnItemsAsync(menu, definition.getNode().getRoot(), 0);
+    }
 
-            if (stack == null || stack.getType() == Material.AIR) {
-                continue;
-            }
-            definition.getNode().getRoot().addItemStack0(menu.getLocation(), stack);
+    private CompletableFuture<Void> consumeAndRefillAsync(
+        @NotNull BlockMenu menu,
+        @NotNull NetworkRoot root,
+        @NotNull Player player,
+        int index) {
+        if (index >= CRAFT_ITEMS.length) {
+            return CompletableFuture.completedFuture(null);
         }
+
+        final int recipeSlot = CRAFT_ITEMS[index];
+        final ItemStack itemInSlot = menu.getItemInSlot(recipeSlot);
+        if (itemInSlot == null || itemInSlot.getType() == Material.AIR) {
+            return consumeAndRefillAsync(menu, root, player, index + 1);
+        }
+
+        final ItemStack itemInSlotClone = itemInSlot.clone();
+        itemInSlotClone.setAmount(1);
+        BlockMenuUtil.consumeItem(menu, recipeSlot, 1, true);
+        if (menu.getItemInSlot(recipeSlot) != null) {
+            return consumeAndRefillAsync(menu, root, player, index + 1);
+        }
+
+        final GridItemRequest request = new GridItemRequest(itemInSlotClone, 1, player);
+        return root.getItemStack0Async(menu.getLocation(), request)
+            .thenCompose(requestingStack -> FoliaSupport.supplyRegion(menu.getLocation(), () -> {
+                if (requestingStack != null && requestingStack.getType() != Material.AIR) {
+                    menu.replaceExistingItem(recipeSlot, requestingStack);
+                }
+                return null;
+            }))
+            .thenCompose(ignored -> consumeAndRefillAsync(menu, root, player, index + 1));
+    }
+
+    private CompletableFuture<Void> returnItemsAsync(
+        @NotNull BlockMenu menu,
+        @NotNull NetworkRoot root,
+        int index) {
+        if (index >= CRAFT_ITEMS.length) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final int recipeSlot = CRAFT_ITEMS[index];
+        final ItemStack stack = menu.getItemInSlot(recipeSlot);
+        if (stack == null || stack.getType() == Material.AIR) {
+            return returnItemsAsync(menu, root, index + 1);
+        }
+
+        final ItemStack transfer = stack.clone();
+        final int originalAmount = transfer.getAmount();
+        return root.addItemStack0Async(menu.getLocation(), transfer)
+            .thenCompose(ignored -> FoliaSupport.supplyRegion(menu.getLocation(), () -> {
+                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                if (moved > 0) {
+                    final ItemStack live = menu.getItemInSlot(recipeSlot);
+                    if (live != null && live.getType() != Material.AIR) {
+                        live.setAmount(Math.max(0, live.getAmount() - moved));
+                    }
+                }
+                return null;
+            }))
+            .thenCompose(ignored -> returnItemsAsync(menu, root, index + 1));
     }
 }

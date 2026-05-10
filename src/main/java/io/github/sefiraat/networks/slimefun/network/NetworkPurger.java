@@ -5,6 +5,7 @@ import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.utils.NetworksVersionedParticle;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
@@ -45,6 +46,7 @@ public class NetworkPurger extends NetworkObject {
     private static final int[] TEST_ITEM_BACKDROP = {3, 4, 5, 12, 14, 21, 22, 23};
 
     private final @NotNull ItemSetting<Integer> tickRate;
+    private final Map<Location, Boolean> pendingPurges = new ConcurrentHashMap<>();
 
     public NetworkPurger(
         @NotNull ItemGroup itemGroup,
@@ -95,6 +97,7 @@ public class NetworkPurger extends NetworkObject {
     }
 
     private void tryKillItem(@NotNull BlockMenu blockMenu) {
+        final Location location = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
         if (definition == null || definition.getNode() == null) {
@@ -111,15 +114,27 @@ public class NetworkPurger extends NetworkObject {
         ItemStack clone = StackUtils.getAsQuantity(testItem, 1);
 
         ItemRequest itemRequest = new ItemRequest(clone, clone.getMaxStackSize());
-        ItemStack retrieved = definition.getNode().getRoot().getItemStack0(blockMenu.getLocation(), itemRequest);
-        if (retrieved != null) {
-            retrieved.setAmount(0);
-            sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-            Location location = blockMenu.getLocation().clone().add(0.5, 1.2, 0.5);
-            if (definition.getNode().getRoot().isDisplayParticles()) {
-                location.getWorld().spawnParticle(NetworksVersionedParticle.SMOKE, location, 0, 0, 0.05, 0);
-            }
+        if (pendingPurges.putIfAbsent(location, Boolean.TRUE) != null) {
+            return;
         }
+        definition.getNode().getRoot().getItemStack0Async(location, itemRequest).whenComplete((retrieved, throwable) ->
+            FoliaSupport.runRegion(location, () -> {
+                pendingPurges.remove(location);
+                if (retrieved != null) {
+                    retrieved.setAmount(0);
+                    sendFeedback(location, FeedbackType.WORKING);
+                    Location particleLocation = location.clone().add(0.5, 1.2, 0.5);
+                    if (definition.getNode().getRoot().isDisplayParticles()) {
+                        particleLocation.getWorld().spawnParticle(
+                            NetworksVersionedParticle.SMOKE,
+                            particleLocation,
+                            0,
+                            0,
+                            0.05,
+                            0);
+                    }
+                }
+            }));
     }
 
     @Override

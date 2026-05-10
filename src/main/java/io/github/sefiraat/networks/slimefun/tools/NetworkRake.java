@@ -36,6 +36,14 @@ public class NetworkRake extends LimitedUseItem {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Block block, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(block)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(block.getLocation(), runnable);
+        }
+    }
+
     public NetworkRake(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -68,23 +76,21 @@ public class NetworkRake extends LimitedUseItem {
         if (optional.isPresent()) {
             final Block block = optional.get();
             final Player player = e.getPlayer();
-            if (!canDirectlyAccess(block)) {
-                player.sendMessage("§cFolia 下无法直接破坏另一个 region 中的网络方块");
-                return;
-            }
-            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
-            if ((slimefunItem instanceof NetworkObject || slimefunItem instanceof ModellableItem)
-                && Slimefun.getProtectionManager().hasPermission(player, block, Interaction.BREAK_BLOCK)) {
-                final BlockBreakEvent event = new BlockBreakEvent(block, player);
-                Networks.getPluginManager().callEvent(event);
-                if (event.isCancelled()) {
-                    return;
-                }
+            runAtTargetRegion(block, () -> {
+                final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+                if ((slimefunItem instanceof NetworkObject || slimefunItem instanceof ModellableItem)
+                    && Slimefun.getProtectionManager().hasPermission(player, block, Interaction.BREAK_BLOCK)) {
+                    final BlockBreakEvent event = new BlockBreakEvent(block, player);
+                    Networks.getPluginManager().callEvent(event);
+                    if (event.isCancelled()) {
+                        return;
+                    }
 
-                block.setType(Material.AIR);
-                Slimefun.getDatabaseManager().getBlockDataController().removeBlock(block.getLocation());
-                damageItem(e.getPlayer(), e.getItem());
-            }
+                    block.setType(Material.AIR);
+                    Slimefun.getDatabaseManager().getBlockDataController().removeBlock(block.getLocation());
+                    FoliaSupport.runPlayer(player, () -> damageItem(player, e.getItem()));
+                }
+            });
         }
     }
 

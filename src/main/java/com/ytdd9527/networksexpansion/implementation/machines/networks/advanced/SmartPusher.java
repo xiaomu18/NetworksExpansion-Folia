@@ -48,6 +48,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @SuppressWarnings("DuplicatedCode")
 public class SmartPusher extends SpecialSlimefunItem implements AdminDebuggable {
     private static final Map<Location, BlockFace> DIRECTIONS = new ConcurrentHashMap<>();
+    private static final Set<Location> PENDING_PUSHES = ConcurrentHashMap.newKeySet();
     private static final Set<BlockFace> VALID_FACES =
         EnumSet.of(BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST);
 
@@ -186,6 +187,7 @@ public class SmartPusher extends SpecialSlimefunItem implements AdminDebuggable 
     }
 
     public void onTick(@NotNull BlockMenu blockMenu, @NotNull BlockFace bridgeFace) {
+        final Location menuLocation = blockMenu.getLocation();
         final BlockFace containerFace = bridgeFace.getOppositeFace();
         final Block thisBlock = blockMenu.getBlock();
         final Block bridge = thisBlock.getRelative(bridgeFace);
@@ -231,10 +233,18 @@ public class SmartPusher extends SpecialSlimefunItem implements AdminDebuggable 
                             }
                             itemRequest.setAmount(Math.min(freeSpace, limitQuantity));
 
-                            final ItemStack retrieved = root.getItemStack0(blockMenu.getLocation(), itemRequest);
-                            if (retrieved != null && retrieved.getType() != Material.AIR) {
-                                BlockMenuUtil.pushItem(targetMenu, retrieved, slots);
+                            if (!PENDING_PUSHES.add(menuLocation)) {
+                                return;
                             }
+                            root.getItemStack0Async(menuLocation, itemRequest).whenComplete((retrieved, throwable) ->
+                                FoliaSupport.runRegion(menuLocation, () -> {
+                                    PENDING_PUSHES.remove(menuLocation);
+                                    if (retrieved != null && retrieved.getType() != Material.AIR) {
+                                        BlockMenuUtil.pushItem(targetMenu, retrieved, slots);
+                                        sendFeedback(menuLocation, FeedbackType.WORKING);
+                                    }
+                                }));
+                            return;
                         }
                     }
                 }

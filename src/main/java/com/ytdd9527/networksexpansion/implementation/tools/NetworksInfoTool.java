@@ -26,6 +26,18 @@ public class NetworksInfoTool extends SpecialSlimefunItem {
         return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
+    private static void runAtTargetRegion(@NotNull Location location, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(location)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(location, runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public NetworksInfoTool(@NotNull ItemGroup itemGroup, @NotNull SlimefunItemStack item) {
         super(itemGroup, item, RecipeType.NULL, new ItemStack[]{});
         addItemHandler((ItemUseHandler) e -> {
@@ -41,39 +53,37 @@ public class NetworksInfoTool extends SpecialSlimefunItem {
                 if (player.isSneaking()) {
                     location.add(0, 1, 0);
                 }
-                if (!canDirectlyAccess(location)) {
-                    player.sendMessage(TextUtil.RED + "Folia 下无法直接查看另一个 region 中的方块");
-                    return;
-                }
-                final SlimefunItem sfi = StorageCacheUtils.getSfItem(location);
-                if (sfi instanceof NetworkObject) {
-                    final NodeDefinition nodeDefinition = NetworkStorage.getNode(location);
-                    if (nodeDefinition == null) {
-                        player.sendMessage(TextUtil.GREEN + "nodeDefinition = null");
-                        return;
+                runAtTargetRegion(location, () -> {
+                    final SlimefunItem sfi = StorageCacheUtils.getSfItem(location);
+                    if (sfi instanceof NetworkObject) {
+                        final NodeDefinition nodeDefinition = NetworkStorage.getNode(location);
+                        if (nodeDefinition == null) {
+                            sendPlayerMessage(player, TextUtil.GREEN + "nodeDefinition = null");
+                            return;
+                        }
+
+                        sendPlayerMessage(player, TextUtil.GREEN + "nodeDefinition.Charge = " + nodeDefinition.getCharge());
+                        sendPlayerMessage(player, TextUtil.GREEN + "nodeDefinition.Type = " + nodeDefinition.getType());
+
+                        if (nodeDefinition.getNode() == null) {
+                            sendPlayerMessage(player, TextUtil.GREEN + "nodeDefinition.Node = null");
+                            return;
+                        }
+
+                        sendPlayerMessage(player, TextUtil.GREEN + "nodeDefinition.Node.NodePosition = "
+                            + nodeDefinition.getNode().getNodePosition());
+
+                        if (nodeDefinition.getNode().getRoot() == null) {
+                            sendPlayerMessage(player, TextUtil.GREEN + "nodeDefinition.Node.Root = null");
+                            return;
+                        }
+
+                        sendPlayerMessage(player, TextUtil.GREEN + "nodeDefinition.Node.Root.NodePosition = "
+                            + nodeDefinition.getNode().getRoot().getNodePosition());
+                    } else {
+                        sendPlayerMessage(player, TextUtil.RED + "Not a NetworkObject");
                     }
-
-                    player.sendMessage(TextUtil.GREEN + "nodeDefinition.Charge = " + nodeDefinition.getCharge());
-                    player.sendMessage(TextUtil.GREEN + "nodeDefinition.Type = " + nodeDefinition.getType());
-
-                    if (nodeDefinition.getNode() == null) {
-                        player.sendMessage(TextUtil.GREEN + "nodeDefinition.Node = null");
-                        return;
-                    }
-
-                    player.sendMessage(TextUtil.GREEN + "nodeDefinition.Node.NodePosition = "
-                        + nodeDefinition.getNode().getNodePosition());
-
-                    if (nodeDefinition.getNode().getRoot() == null) {
-                        player.sendMessage(TextUtil.GREEN + "nodeDefinition.Node.Root = null");
-                        return;
-                    }
-
-                    player.sendMessage(TextUtil.GREEN + "nodeDefinition.Node.Root.NodePosition = "
-                        + nodeDefinition.getNode().getRoot().getNodePosition());
-                } else {
-                    player.sendMessage(TextUtil.RED + "Not a NetworkObject");
-                }
+                });
             }
         });
     }

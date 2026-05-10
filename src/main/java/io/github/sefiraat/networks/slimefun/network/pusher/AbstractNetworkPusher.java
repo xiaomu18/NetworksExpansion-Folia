@@ -5,6 +5,7 @@ import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.balugaq.netex.utils.BlockMenuUtil;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
@@ -21,9 +22,13 @@ import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.Location;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
 public abstract class AbstractNetworkPusher extends NetworkDirectional implements SoftCellBannable {
@@ -33,6 +38,7 @@ public abstract class AbstractNetworkPusher extends NetworkDirectional implement
     private static final int WEST_SLOT = 19;
     private static final int UP_SLOT = 14;
     private static final int DOWN_SLOT = 32;
+    private final Set<Location> pendingPushes = ConcurrentHashMap.newKeySet();
 
     public AbstractNetworkPusher(
         @NotNull ItemGroup itemGroup,
@@ -54,6 +60,7 @@ public abstract class AbstractNetworkPusher extends NetworkDirectional implement
     }
 
     private void tryPushItem(@NotNull BlockMenu blockMenu) {
+        final Location menuLocation = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
         if (definition == null || definition.getNode() == null) {
@@ -104,18 +111,26 @@ public abstract class AbstractNetworkPusher extends NetworkDirectional implement
                     }
                 }
 
-                ItemStack retrieved =
-                    definition.getNode().getRoot().getItemStack0(blockMenu.getLocation(), itemRequest);
-                if (retrieved != null) {
-                    BlockMenuUtil.pushItem(targetMenu, retrieved, slots);
-                    sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-                    if (definition.getNode().getRoot().isDisplayParticles()) {
-                        showParticle(blockMenu.getLocation(), direction);
-                    }
-                } else {
-                    sendFeedback(blockMenu.getLocation(), FeedbackType.NO_ITEM_FOUND);
+                if (!pendingPushes.add(menuLocation)) {
+                    return;
                 }
+                definition.getNode().getRoot().getItemStack0Async(menuLocation, itemRequest).whenComplete((fetched, throwable) ->
+                    FoliaSupport.runRegion(menuLocation, () -> {
+                        pendingPushes.remove(menuLocation);
+                        if (fetched != null) {
+                            BlockMenuUtil.pushItem(targetMenu, fetched, slots);
+                            sendFeedback(menuLocation, FeedbackType.WORKING);
+                            if (definition.getNode().getRoot().isDisplayParticles()) {
+                                showParticle(menuLocation, direction);
+                            }
+                        } else {
+                            sendFeedback(menuLocation, FeedbackType.NO_ITEM_FOUND);
+                        }
+                    }));
                 break;
+            }
+            if (pendingPushes.contains(menuLocation)) {
+                return;
             }
         }
     }

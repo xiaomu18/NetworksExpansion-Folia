@@ -7,6 +7,7 @@ import com.balugaq.netex.utils.NetworksVersionedParticle;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
@@ -37,6 +38,7 @@ import org.jetbrains.annotations.NotNull;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class AdvancedPurger extends NetworkObject implements RecipeDisplayItem {
@@ -52,6 +54,7 @@ public class AdvancedPurger extends NetworkObject implements RecipeDisplayItem {
     };
     private static final int[] TEST_ITEM_BACKDROP = {8, 17, 26, 35, 44, 53};
     private final @NotNull ItemSetting<Integer> tickRate;
+    private final Map<Location, Boolean> pendingPurges = new ConcurrentHashMap<>();
 
     @Setter
     private boolean useSpecialModel = false;
@@ -105,16 +108,22 @@ public class AdvancedPurger extends NetworkObject implements RecipeDisplayItem {
     }
 
     private void tryKillItem(@NotNull BlockMenu blockMenu) {
+        final Location location = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
         if (definition == null || definition.getNode() == null) {
             sendFeedback(blockMenu.getLocation(), FeedbackType.NO_NETWORK_FOUND);
             return;
         }
+        if (pendingPurges.putIfAbsent(location, Boolean.TRUE) != null) {
+            return;
+        }
+        CompletableFuture<Boolean> chain = CompletableFuture.completedFuture(false);
         for (int testitemslot : TEST_ITEM_SLOT) {
             ItemStack testItem = blockMenu.getItemInSlot(testitemslot);
 
             if (testItem == null) {
+                pendingPurges.remove(location);
                 sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TEMPLATE_FOUND);
                 return;
             }
@@ -123,16 +132,23 @@ public class AdvancedPurger extends NetworkObject implements RecipeDisplayItem {
             clone.setAmount(1);
 
             ItemRequest itemRequest = new ItemRequest(clone, clone.getMaxStackSize());
-            ItemStack retrieved = definition.getNode().getRoot().getItemStack0(blockMenu.getLocation(), itemRequest);
-            if (retrieved != null) {
-                retrieved.setAmount(0);
-                Location location = blockMenu.getLocation().clone().add(0.5, 1.2, 0.5);
-                if (definition.getNode().getRoot().isDisplayParticles()) {
-                    location.getWorld().spawnParticle(NetworksVersionedParticle.SMOKE, location, 0, 0, 0.05, 0);
-                }
-            }
+            chain = chain.thenCompose(foundAny ->
+                definition.getNode().getRoot().getItemStack0Async(location, itemRequest).thenApply(retrieved -> {
+                    if (retrieved != null) {
+                        retrieved.setAmount(0);
+                        return true;
+                    }
+                    return foundAny;
+                }));
         }
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+        chain.whenComplete((foundAny, throwable) -> FoliaSupport.runRegion(location, () -> {
+            pendingPurges.remove(location);
+            if (Boolean.TRUE.equals(foundAny) && definition.getNode().getRoot().isDisplayParticles()) {
+                Location particleLocation = location.clone().add(0.5, 1.2, 0.5);
+                particleLocation.getWorld().spawnParticle(NetworksVersionedParticle.SMOKE, particleLocation, 0, 0, 0.05, 0);
+            }
+            sendFeedback(location, FeedbackType.WORKING);
+        }));
     }
 
     @Override

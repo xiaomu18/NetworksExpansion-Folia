@@ -3,7 +3,9 @@ package io.github.sefiraat.networks.slimefun.network;
 import com.balugaq.netex.api.enums.FeedbackType;
 import com.balugaq.netex.api.helpers.Icon;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
+import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
 import io.github.sefiraat.networks.slimefun.NetworkSlimefunItems;
@@ -23,6 +25,9 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 public class NetworkWirelessReceiver extends NetworkObject {
 
     public static final int RECEIVED_SLOT = 13;
@@ -31,6 +36,7 @@ public class NetworkWirelessReceiver extends NetworkObject {
         new int[]{0, 1, 2, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26};
 
     private static final int[] RECEIVED_SLOTS_TEMPLATE = new int[]{3, 4, 5, 12, 14, 21, 22, 23};
+    private static final Set<org.bukkit.Location> PENDING_IMPORTS = ConcurrentHashMap.newKeySet();
 
     public NetworkWirelessReceiver(
         @NotNull ItemGroup itemGroup,
@@ -58,22 +64,40 @@ public class NetworkWirelessReceiver extends NetworkObject {
     }
 
     private void onTick(@NotNull BlockMenu blockMenu) {
+        final org.bukkit.Location menuLocation = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
         if (definition == null || definition.getNode() == null) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_NETWORK_FOUND);
+            sendFeedback(menuLocation, FeedbackType.NO_NETWORK_FOUND);
             return;
         }
 
         final ItemStack itemStack = blockMenu.getItemInSlot(RECEIVED_SLOT);
 
         if (itemStack == null || itemStack.getType() == Material.AIR) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_ITEM_FOUND);
+            sendFeedback(menuLocation, FeedbackType.NO_ITEM_FOUND);
             return;
         }
 
-        definition.getNode().getRoot().addItemStack0(blockMenu.getLocation(), itemStack);
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+        if (!PENDING_IMPORTS.add(menuLocation)) {
+            return;
+        }
+
+        final NetworkRoot root = definition.getNode().getRoot();
+        final ItemStack transfer = itemStack.clone();
+        final int originalAmount = transfer.getAmount();
+        root.addItemStack0Async(menuLocation, transfer).whenComplete((ignored, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> {
+                PENDING_IMPORTS.remove(menuLocation);
+                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                if (moved > 0) {
+                    final ItemStack live = blockMenu.getItemInSlot(RECEIVED_SLOT);
+                    if (live != null && live.getType() != Material.AIR) {
+                        live.setAmount(Math.max(0, live.getAmount() - moved));
+                    }
+                }
+                sendFeedback(menuLocation, FeedbackType.WORKING);
+            }));
     }
 
     @Override

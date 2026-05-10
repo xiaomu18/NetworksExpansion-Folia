@@ -34,11 +34,15 @@ import org.jspecify.annotations.NullMarked;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 @NullMarked
 public class AdvancedWirelessTransmitter extends AdvancedDirectional implements SoftCellBannable {
     private static final String BS_TARGET_LOCATION = "target";
     private static final int[] TEMPLATE_SLOTS = new int[]{0, 1, 2, 3};
+    private final Map<Location, Boolean> pendingTransfers = new ConcurrentHashMap<>();
     public AdvancedWirelessTransmitter(ItemGroup itemGroup, SlimefunItemStack item, RecipeType recipeType, ItemStack[] recipe) {
         super(itemGroup, item, recipeType, recipe, NodeType.ADVANCED_WIRELESS_TRANSMITTER);
         for (int slot : TEMPLATE_SLOTS) {
@@ -196,11 +200,6 @@ public class AdvancedWirelessTransmitter extends AdvancedDirectional implements 
             return;
         }
 
-        if (target.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(target)) {
-            sendFeedback(location, FeedbackType.NO_TARGET_NETWORK_FOUND);
-            return;
-        }
-
         NodeDefinition srcn = NetworkStorage.getNode(location);
         if (srcn == null || srcn.getNode() == null) {
             sendFeedback(location, FeedbackType.NO_NETWORK_FOUND);
@@ -234,13 +233,31 @@ public class AdvancedWirelessTransmitter extends AdvancedDirectional implements 
             sendFeedback(location, FeedbackType.NO_TEMPLATE_FOUND);
             return;
         }
-        for (ItemStack template : templates) {
-            ItemStack itemStack = src.getItemStack0(location, new ItemRequest(template, getLimitQuantity(location)));
-            if (itemStack != null && itemStack.getAmount() > 0) {
-                tgt.addItemStack0(target, itemStack);
-                src.addItemStack(itemStack);
-            }
+
+        if (pendingTransfers.putIfAbsent(location, Boolean.TRUE) != null) {
+            return;
         }
-        sendFeedback(location, FeedbackType.WORKING);
+
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+        for (ItemStack template : templates) {
+            final ItemStack templateClone = template.clone();
+            chain = chain.thenCompose(ignored ->
+                src.getItemStack0Async(location, new ItemRequest(templateClone, getLimitQuantity(location))).thenCompose(itemStack -> {
+                    if (itemStack == null || itemStack.getAmount() <= 0) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    return tgt.addItemStack0Async(target, itemStack).thenAccept(ignored2 -> {
+                        if (itemStack.getAmount() > 0) {
+                            src.addItemStack0Async(location, itemStack);
+                        }
+                    });
+                }));
+        }
+
+        chain.whenComplete((ignored, throwable) -> FoliaSupport.runRegion(location, () -> {
+            pendingTransfers.remove(location);
+            sendFeedback(location, FeedbackType.WORKING);
+        }));
     }
 }

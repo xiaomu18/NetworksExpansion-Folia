@@ -115,6 +115,18 @@ public class NetworksMain implements TabExecutor {
         return false;
     }
 
+    private static void runAtTargetRegion(@NotNull Location location, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(location)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(location, runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     @Deprecated
     public static @Nullable Location getPos1(@NotNull Player p) {
         if (SELECTED_POS.get(p.getUniqueId()) == null) {
@@ -210,28 +222,22 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-admin-debuggable"));
             return;
         }
-        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
-            return;
-        }
+        final Location targetLocation = targetBlock.getLocation();
+        runAtTargetRegion(targetLocation, () -> {
+            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetLocation);
+            if (!(slimefunItem instanceof AdminDebuggable debuggable)) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-admin-debuggable"));
+                return;
+            }
 
-        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
-        if (slimefunItem == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-admin-debuggable"));
-            return;
-        }
-
-        if (!(slimefunItem instanceof AdminDebuggable debuggable)) {
-            player.sendMessage(Lang.getString("messages.commands.must-admin-debuggable"));
-            return;
-        }
-
-        if (debuggable.hasViewer(player)) {
-            debuggable.removeViewer(player);
-            player.sendMessage(Lang.getString("messages.commands.viewer-removed"));
-        } else {
-            debuggable.addViewer(player);
-            player.sendMessage(Lang.getString("messages.commands.viewer-added"));
-        }
+            if (debuggable.hasViewer(player)) {
+                debuggable.removeViewer(player);
+                sendPlayerMessage(player, Lang.getString("messages.commands.viewer-removed"));
+            } else {
+                debuggable.addViewer(player);
+                sendPlayerMessage(player, Lang.getString("messages.commands.viewer-added"));
+            }
+        });
     }
 
     public static void setQuantum(@NotNull Player player, long amount) {
@@ -240,50 +246,49 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-quantum-storage"));
             return;
         }
-        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
-            return;
-        }
-
-        final SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetBlock.getLocation());
-        if (blockData == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-quantum-storage"));
-            return;
-        }
-
-        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
-        if (slimefunItem == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-quantum-storage"));
-            return;
-        }
-
         final Location targetLocation = targetBlock.getLocation();
-        if (!(slimefunItem instanceof NetworkQuantumStorage)) {
-            player.sendMessage(Lang.getString("messages.commands.invalid-quantum-storage"));
-            return;
-        }
+        final ItemStack handClone = player.getInventory().getItemInMainHand().clone();
+        runAtTargetRegion(targetLocation, () -> {
+            final SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetLocation);
+            if (blockData == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-look-at-quantum-storage"));
+                return;
+            }
 
-        final BlockMenu blockMenu = StorageCacheUtils.getMenu(targetLocation);
-        if (blockMenu == null) {
-            player.sendMessage(Lang.getString("messages.commands.invalid-quantum-storage"));
-            return;
-        }
+            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetLocation);
+            if (!(slimefunItem instanceof NetworkQuantumStorage)) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.invalid-quantum-storage"));
+                return;
+            }
 
-        final QuantumCache cache = NetworkQuantumStorage.getCaches().get(blockMenu.getLocation());
-        final ItemStack itemInHand = player.getInventory().getItemInMainHand();
-        if ((cache.getItemStack() == null || cache.getItemStack().getType() == Material.AIR)
-            && itemInHand.getType() == Material.AIR) {
-            player.sendMessage(Lang.getString("messages.commands.must-hand-item"));
-            return;
-        }
-        final ItemStack clone = (itemInHand.getType() == Material.AIR ? cache.getItemStack() : itemInHand).clone();
-        NetworkQuantumStorage.setItem(blockMenu, clone, amount);
+            final BlockMenu blockMenu = StorageCacheUtils.getMenu(targetLocation);
+            if (blockMenu == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.invalid-quantum-storage"));
+                return;
+            }
 
-        clone.setAmount(1);
-        cache.setItemStack(clone);
-        cache.setAmount(Math.min(amount, cache.getLimitLong()));
-        NetworkQuantumStorage.updateDisplayItem(blockMenu, cache);
-        NetworkQuantumStorage.syncBlock(blockMenu.getLocation(), cache);
-        NetworkQuantumStorage.getCaches().put(blockMenu.getLocation(), cache);
+            final QuantumCache cache = NetworkQuantumStorage.getCaches().get(blockMenu.getLocation());
+            if (cache == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.invalid-quantum-storage"));
+                return;
+            }
+
+            if ((cache.getItemStack() == null || cache.getItemStack().getType() == Material.AIR)
+                && handClone.getType() == Material.AIR) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-hand-item"));
+                return;
+            }
+
+            final ItemStack clone = (handClone.getType() == Material.AIR ? cache.getItemStack() : handClone).clone();
+            NetworkQuantumStorage.setItem(blockMenu, clone, amount);
+
+            clone.setAmount(1);
+            cache.setItemStack(clone);
+            cache.setAmount(Math.min(amount, cache.getLimitLong()));
+            NetworkQuantumStorage.updateDisplayItem(blockMenu, cache);
+            NetworkQuantumStorage.syncBlock(blockMenu.getLocation(), cache);
+            NetworkQuantumStorage.getCaches().put(blockMenu.getLocation(), cache);
+        });
     }
 
     private static void addStorageItem(@NotNull Player player, int amount) {
@@ -292,45 +297,38 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
             return;
         }
-        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
-            return;
-        }
-
         final ItemStack itemInHand = player.getInventory().getItemInMainHand();
         if (itemInHand.getType() == Material.AIR) {
             player.sendMessage(Lang.getString("messages.commands.must-hand-item"));
             return;
         }
-
-        final SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetBlock.getLocation());
-        if (blockData == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-            return;
-        }
-
-        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
-        if (slimefunItem == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-            return;
-        }
-
-        if (!(slimefunItem instanceof NetworksDrawer)) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-        }
-
         final Location targetLocation = targetBlock.getLocation();
-        final ItemStack clone = itemInHand.clone();
-        final StorageUnitData data = NetworksDrawer.getStorageData(targetLocation);
+        final ItemStack handClone = itemInHand.clone();
+        runAtTargetRegion(targetLocation, () -> {
+            final SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetLocation);
+            if (blockData == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-look-at-drawer"));
+                return;
+            }
 
-        if (data == null) {
-            player.sendMessage(Lang.getString("messages.commands.invalid-drawer"));
-            return;
-        }
+            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetLocation);
+            if (!(slimefunItem instanceof NetworksDrawer)) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-look-at-drawer"));
+                return;
+            }
 
-        clone.setAmount(amount);
-        data.depositItemStack(clone, false);
-        NetworksDrawer.setStorageData(targetLocation, data);
-        player.sendMessage(Lang.getString("messages.commands.updated-drawer"));
+            final StorageUnitData data = NetworksDrawer.getStorageData(targetLocation);
+            if (data == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.invalid-drawer"));
+                return;
+            }
+
+            final ItemStack clone = handClone.clone();
+            clone.setAmount(amount);
+            data.depositItemStack(clone, false);
+            NetworksDrawer.setStorageData(targetLocation, data);
+            sendPlayerMessage(player, Lang.getString("messages.commands.updated-drawer"));
+        });
     }
 
     private static void reduceStorageItem(@NotNull Player player, int amount) {
@@ -339,45 +337,38 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
             return;
         }
-        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
-            return;
-        }
-
         final ItemStack itemInHand = player.getInventory().getItemInMainHand();
         if (itemInHand.getType() == Material.AIR) {
             player.sendMessage(Lang.getString("messages.commands.must-hand-item"));
             return;
         }
-
-        final SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetBlock.getLocation());
-        if (blockData == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-            return;
-        }
-
-        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
-        if (slimefunItem == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-            return;
-        }
-
-        if (!(slimefunItem instanceof NetworksDrawer)) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-        }
-
         final Location targetLocation = targetBlock.getLocation();
-        final ItemStack clone = itemInHand.clone();
-        final StorageUnitData data = NetworksDrawer.getStorageData(targetLocation);
+        final ItemStack handClone = itemInHand.clone();
+        runAtTargetRegion(targetLocation, () -> {
+            final SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetLocation);
+            if (blockData == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-look-at-drawer"));
+                return;
+            }
 
-        if (data == null) {
-            player.sendMessage(Lang.getString("messages.commands.invalid-drawer"));
-            return;
-        }
+            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetLocation);
+            if (!(slimefunItem instanceof NetworksDrawer)) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-look-at-drawer"));
+                return;
+            }
 
-        clone.setAmount(1);
-        data.requestItem(new ItemRequest(clone, amount));
-        NetworksDrawer.setStorageData(targetLocation, data);
-        player.sendMessage(Lang.getString("messages.commands.updated-drawer"));
+            final StorageUnitData data = NetworksDrawer.getStorageData(targetLocation);
+            if (data == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.invalid-drawer"));
+                return;
+            }
+
+            final ItemStack clone = handClone.clone();
+            clone.setAmount(1);
+            data.requestItem(new ItemRequest(clone, amount));
+            NetworksDrawer.setStorageData(targetLocation, data);
+            sendPlayerMessage(player, Lang.getString("messages.commands.updated-drawer"));
+        });
     }
 
     public static void setContainerId(@NotNull Player player, int containerId) {
@@ -386,27 +377,19 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
             return;
         }
-        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
-            return;
-        }
-
-        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
-        if (slimefunItem == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-            return;
-        }
-
-        if (!(slimefunItem instanceof NetworksDrawer)) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-            return;
-        }
-
         final Location location = targetBlock.getLocation();
-
         player.sendMessage(Lang.getString("messages.commands.wait-for-data"));
-        NetworksDrawer.requestData(location, containerId);
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.set-container-id"), locationToString(location), containerId));
+        runAtTargetRegion(location, () -> {
+            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(location);
+            if (!(slimefunItem instanceof NetworksDrawer)) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-look-at-drawer"));
+                return;
+            }
+
+            NetworksDrawer.requestData(location, containerId);
+            sendPlayerMessage(player, String.format(
+                Lang.getString("messages.commands.set-container-id"), locationToString(location), containerId));
+        });
     }
 
     @Deprecated
@@ -542,46 +525,41 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
             return;
         }
-        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
-            return;
-        }
-
-        final SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetBlock.getLocation());
-        if (blockData == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-            return;
-        }
-
-        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
-        if (slimefunItem == null) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-            return;
-        }
-
-        if (!(slimefunItem instanceof NetworksDrawer)) {
-            player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
-        }
-
         final Location targetLocation = targetBlock.getLocation();
-        final StorageUnitData data = NetworksDrawer.getStorageData(targetLocation);
-
-        if (data == null) {
-            player.sendMessage(Lang.getString("messages.commands.invalid-drawer"));
-            return;
-        }
-
-        final List<ItemContainer> stored = data.getStoredItems();
-        if (slot >= stored.size()) {
-            player.sendMessage(String.format(Lang.getString("messages.commands.invalid-slot"), stored.size() - 1));
-        } else {
-            final ItemStack stack = stored.get(slot).getSampleDirectly();
-            if (stack == null || stack.getType() == Material.AIR) {
-                player.sendMessage(Lang.getString("messages.commands.empty-slot"));
+        runAtTargetRegion(targetLocation, () -> {
+            final SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetLocation);
+            if (blockData == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-look-at-drawer"));
                 return;
             }
 
-            InventoryUtil.addItem(player, StackUtils.getAsQuantity(stack, 1));
-        }
+            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetLocation);
+            if (!(slimefunItem instanceof NetworksDrawer)) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.must-look-at-drawer"));
+                return;
+            }
+
+            final StorageUnitData data = NetworksDrawer.getStorageData(targetLocation);
+            if (data == null) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.invalid-drawer"));
+                return;
+            }
+
+            final List<ItemContainer> stored = data.getStoredItems();
+            if (slot >= stored.size()) {
+                sendPlayerMessage(player, String.format(Lang.getString("messages.commands.invalid-slot"), stored.size() - 1));
+                return;
+            }
+
+            final ItemStack stack = stored.get(slot).getSampleDirectly();
+            if (stack == null || stack.getType() == Material.AIR) {
+                sendPlayerMessage(player, Lang.getString("messages.commands.empty-slot"));
+                return;
+            }
+
+            final ItemStack give = StackUtils.getAsQuantity(stack, 1);
+            FoliaSupport.runPlayer(player, () -> InventoryUtil.addItem(player, give));
+        });
     }
 
     public static void help(@NotNull CommandSender sender, @Nullable String mainCommand) {
@@ -937,22 +915,7 @@ public class NetworksMain implements TabExecutor {
                         player.sendMessage(Lang.getString("messages.commands.must-admin-debuggable"));
                         return true;
                     }
-                    if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
-                        return true;
-                    }
-
-                    final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
-                    if (slimefunItem == null) {
-                        player.sendMessage(Lang.getString("messages.commands.must-admin-debuggable"));
-                        return true;
-                    }
-
-                    if (!(slimefunItem instanceof AdminDebuggable debuggable)) {
-                        player.sendMessage(Lang.getString("messages.commands.must-admin-debuggable"));
-                        return true;
-                    }
-
-                    Location lookingAt = targetBlock.getLocation();
+                    final Location lookingAt = targetBlock.getLocation();
                     String cchName = args[1];
                     Map<Location, ?> map;
                     switch (cchName) {
@@ -973,28 +936,37 @@ public class NetworksMain implements TabExecutor {
                         }
                     }
 
-                    Object value = map.get(lookingAt);
-                    if (value == null) {
-                        player.sendMessage("no cache yet.");
-                    }
-
-                    if (value instanceof Map<?, ?>) {
-                        player.sendMessage("缓存: " + cchName);
-                        @SuppressWarnings("unchecked") Map<Location, Integer> locations = (Map<Location, Integer>) value;
-                        Map<String, Integer> formatted = locations.entrySet().stream().map(e -> {
-                            SlimefunItem sf = canDirectlyAccess(e.getKey()) ? StorageCacheUtils.getSfItem(e.getKey()) : null;
-                            if (sf == null) {
-                                return Map.entry(e.getKey().toString(), e.getValue());
-                            }
-                            return Map.entry(ChatColor.translateAlternateColorCodes('&', sf.getItemName()), e.getValue());
-                        }).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-                        for (Map.Entry<String, Integer> entry : formatted.entrySet()) {
-                            player.sendMessage(entry.getKey() + ": " + entry.getValue());
+                    runAtTargetRegion(lookingAt, () -> {
+                        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(lookingAt);
+                        if (!(slimefunItem instanceof AdminDebuggable)) {
+                            sendPlayerMessage(player, Lang.getString("messages.commands.must-admin-debuggable"));
+                            return;
                         }
-                    } else if (value instanceof Number n) {
-                        player.sendMessage("缓存: " + cchName);
-                        player.sendMessage("值: " + n.intValue());
-                    }
+
+                        Object value = map.get(lookingAt);
+                        if (value == null) {
+                            sendPlayerMessage(player, "no cache yet.");
+                            return;
+                        }
+
+                        if (value instanceof Map<?, ?>) {
+                            sendPlayerMessage(player, "缓存: " + cchName);
+                            @SuppressWarnings("unchecked") Map<Location, Integer> locations = (Map<Location, Integer>) value;
+                            Map<String, Integer> formatted = locations.entrySet().stream().map(e -> {
+                                SlimefunItem sf = canDirectlyAccess(e.getKey()) ? StorageCacheUtils.getSfItem(e.getKey()) : null;
+                                if (sf == null) {
+                                    return Map.entry(e.getKey().toString(), e.getValue());
+                                }
+                                return Map.entry(ChatColor.translateAlternateColorCodes('&', sf.getItemName()), e.getValue());
+                            }).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+                            for (Map.Entry<String, Integer> entry : formatted.entrySet()) {
+                                sendPlayerMessage(player, entry.getKey() + ": " + entry.getValue());
+                            }
+                        } else if (value instanceof Number n) {
+                            sendPlayerMessage(player, "缓存: " + cchName);
+                            sendPlayerMessage(player, "值: " + n.intValue());
+                        }
+                    });
                 }
 
                 default -> help(player, null);

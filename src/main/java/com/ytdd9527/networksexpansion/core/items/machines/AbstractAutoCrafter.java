@@ -8,6 +8,7 @@ import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.balugaq.netex.utils.BlockMenuUtil;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.ytdd9527.networksexpansion.core.items.unusable.AbstractBlueprint;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -42,6 +43,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
@@ -49,6 +51,7 @@ public abstract class AbstractAutoCrafter extends NetworkObject implements SoftC
     public static final int BLUEPRINT_SLOT = 10;
     public static final int OUTPUT_SLOT = 16;
     public static final Map<Location, BlueprintInstance> INSTANCE_MAP = new ConcurrentHashMap<>();
+    public static final Map<Location, Boolean> PENDING_CRAFTS = new ConcurrentHashMap<>();
     private static final int[] BACKGROUND_SLOTS = new int[]{3, 4, 5, 12, 13, 14, 21, 22, 23};
     private static final int[] BLUEPRINT_BACKGROUND = new int[]{0, 1, 2, 9, 11, 18, 19, 20};
     private static final int[] OUTPUT_BACKGROUND = new int[]{6, 7, 8, 15, 17, 24, 25, 26};
@@ -92,35 +95,48 @@ public abstract class AbstractAutoCrafter extends NetworkObject implements SoftC
     }
 
     protected void craftPreFlight(@NotNull BlockMenu blockMenu) {
+        final Location menuLocation = blockMenu.getLocation();
 
         releaseCache(blockMenu);
 
-        final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
+        final NodeDefinition definition = NetworkStorage.getNode(menuLocation);
 
         if (definition == null || definition.getNode() == null) {
-            sendDebugMessage(blockMenu.getLocation(), "No network found");
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_NETWORK_FOUND);
+            sendDebugMessage(menuLocation, "No network found");
+            sendFeedback(menuLocation, FeedbackType.NO_NETWORK_FOUND);
             return;
         }
 
         final NetworkRoot root = definition.getNode().getRoot();
 
-        if (checkSoftCellBan(blockMenu.getLocation(), root)) {
+        if (checkSoftCellBan(menuLocation, root)) {
             return;
         }
 
         if (!withholding) {
             final ItemStack stored = blockMenu.getItemInSlot(OUTPUT_SLOT);
             if (stored != null && stored.getType() != Material.AIR) {
-                root.addItemStack0(blockMenu.getLocation(), stored);
+                final ItemStack transfer = stored.clone();
+                final int originalAmount = transfer.getAmount();
+                root.addItemStack0Async(menuLocation, transfer).whenComplete((ignored, throwable) ->
+                    FoliaSupport.runRegion(menuLocation, () -> {
+                        final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                        if (moved > 0) {
+                            final ItemStack live = blockMenu.getItemInSlot(OUTPUT_SLOT);
+                            if (live != null && live.getType() != Material.AIR) {
+                                live.setAmount(Math.max(0, live.getAmount() - moved));
+                            }
+                        }
+                    }));
+                return;
             }
         }
 
         final ItemStack blueprint = blockMenu.getItemInSlot(BLUEPRINT_SLOT);
 
         if (blueprint == null || blueprint.getType() == Material.AIR) {
-            sendDebugMessage(blockMenu.getLocation(), "No blueprint found");
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_BLUEPRINT_FOUND);
+            sendDebugMessage(menuLocation, "No blueprint found");
+            sendFeedback(menuLocation, FeedbackType.NO_BLUEPRINT_FOUND);
             return;
         }
 
@@ -130,12 +146,12 @@ public abstract class AbstractAutoCrafter extends NetworkObject implements SoftC
             final SlimefunItem item = SlimefunItem.getByItem(blueprint);
 
             if (!isValidBlueprint(item)) {
-                sendDebugMessage(blockMenu.getLocation(), "Invalid blueprint");
-                sendFeedback(blockMenu.getLocation(), FeedbackType.INVALID_BLUEPRINT);
+                sendDebugMessage(menuLocation, "Invalid blueprint");
+                sendFeedback(menuLocation, FeedbackType.INVALID_BLUEPRINT);
                 return;
             }
 
-            BlueprintInstance instance = AbstractAutoCrafter.INSTANCE_MAP.get(blockMenu.getLocation());
+            BlueprintInstance instance = AbstractAutoCrafter.INSTANCE_MAP.get(menuLocation);
 
             if (instance == null) {
                 final ItemMeta blueprintMeta = blueprint.getItemMeta();
@@ -154,8 +170,8 @@ public abstract class AbstractAutoCrafter extends NetworkObject implements SoftC
                 }
 
                 if (optional.isEmpty()) {
-                    sendDebugMessage(blockMenu.getLocation(), "No blueprint instance found");
-                    sendFeedback(blockMenu.getLocation(), FeedbackType.NO_BLUEPRINT_INSTANCE_FOUND);
+                    sendDebugMessage(menuLocation, "No blueprint instance found");
+                    sendFeedback(menuLocation, FeedbackType.NO_BLUEPRINT_INSTANCE_FOUND);
                     return;
                 }
 
@@ -172,30 +188,37 @@ public abstract class AbstractAutoCrafter extends NetworkObject implements SoftC
                 && targetOutput != null
                 && (output.getAmount() + targetOutput.getAmount() * blueprintAmount > output.getMaxStackSize()
                 || !StackUtils.itemsMatch(targetOutput, output))) {
-                sendDebugMessage(blockMenu.getLocation(), "Output slot is full");
-                sendFeedback(blockMenu.getLocation(), FeedbackType.OUTPUT_FULL);
+                sendDebugMessage(menuLocation, "Output slot is full");
+                sendFeedback(menuLocation, FeedbackType.OUTPUT_FULL);
                 return;
             }
 
-            if (tryCraft(blockMenu, instance, root, blueprintAmount, output)) {
-                root.removeRootPower(this.chargePerCraft);
+            if (PENDING_CRAFTS.putIfAbsent(menuLocation, Boolean.TRUE) != null) {
+                return;
             }
+            tryCraftAsync(blockMenu, instance, root, blueprintAmount).whenComplete((success, throwable) ->
+                FoliaSupport.runRegion(menuLocation, () -> {
+                    PENDING_CRAFTS.remove(menuLocation);
+                    if (Boolean.TRUE.equals(success)) {
+                        root.removeRootPower(this.chargePerCraft);
+                    }
+                }));
         } else {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NOT_ENOUGH_POWER);
+            sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_POWER);
         }
     }
 
     @SuppressWarnings("DataFlowIssue")
-    private boolean tryCraft(
+    private CompletableFuture<Boolean> tryCraftAsync(
         @NotNull BlockMenu blockMenu,
         @NotNull BlueprintInstance instance,
         @NotNull NetworkRoot root,
-        int blueprintAmount,
-        @Nullable ItemStack existing) {
+        int blueprintAmount) {
         /* Make sure the network has the required items
          * Needs to be revisited as matching is happening stacks 2x when it should
          * only need the one
          */
+        final Location menuLocation = blockMenu.getLocation();
         HashMap<ItemStack, Integer> requiredItems = new HashMap<>();
         for (int i = 0; i < 9; i++) {
             final ItemStack requested = instance.getRecipeItems()[i];
@@ -204,61 +227,102 @@ public abstract class AbstractAutoCrafter extends NetworkObject implements SoftC
             }
         }
 
-        for (Map.Entry<ItemStack, Integer> entry : requiredItems.entrySet()) {
-            if (!root.contains(new ItemRequest(entry.getKey(), entry.getValue()))) {
-                sendDebugMessage(blockMenu.getLocation(), "Not enough items in network");
-                sendFeedback(blockMenu.getLocation(), FeedbackType.NOT_ENOUGH_ITEMS_IN_NETWORK);
-                return false;
-            }
-        }
-
-        ItemStack[] fetcheds = new ItemStack[9];
-        // Then fetch the actual items
-        for (int i = 0; i < 9; i++) {
-            final ItemStack requested = instance.getRecipeItems()[i];
-            if (requested != null) {
-                final ItemStack fetched = root.getItemStack0(
-                    blockMenu.getLocation(), new ItemRequest(requested, requested.getAmount() * blueprintAmount));
-                fetcheds[i] = fetched;
-                if (fetched == null || fetched.getAmount() < requested.getAmount() * blueprintAmount) {
-                    returnItems(root, fetcheds, blockMenu);
+        return hasRequiredItemsAsync(root, requiredItems).thenCompose(hasRequiredItems -> {
+            if (!Boolean.TRUE.equals(hasRequiredItems)) {
+                return FoliaSupport.supplyRegion(menuLocation, () -> {
+                    sendDebugMessage(menuLocation, "Not enough items in network");
+                    sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_ITEMS_IN_NETWORK);
                     return false;
-                }
+                });
             }
+
+            return fetchRecipeItemsAsync(blockMenu, root, menuLocation, instance, blueprintAmount, 0, new ItemStack[9]).thenCompose(fetcheds -> {
+                if (fetcheds == null) {
+                    return CompletableFuture.completedFuture(false);
+                }
+
+                return FoliaSupport.supplyRegion(menuLocation, () -> {
+                    final Location particleLocation = menuLocation.clone().add(0.5, 1.1, 0.5);
+                    if (root.isDisplayParticles()) {
+                        particleLocation.getWorld().spawnParticle(Particle.WAX_OFF, particleLocation, 0, 0, 4, 0);
+                    }
+
+                    ItemStack crafted = instance.getItemStack().clone();
+                    crafted.setAmount(crafted.getAmount() * blueprintAmount);
+
+                    if (crafted.getAmount() > crafted.getMaxStackSize()) {
+                        returnItems(root, fetcheds, blockMenu);
+                        sendDebugMessage(menuLocation, "Result is too large");
+                        sendFeedback(menuLocation, FeedbackType.RESULT_IS_TOO_LARGE);
+                        return false;
+                    }
+
+                    final ItemStack existing = blockMenu.getItemInSlot(OUTPUT_SLOT);
+                    if (existing != null && existing.getType() != Material.AIR) {
+                        root.addItemStack0Async(menuLocation, crafted);
+                    }
+                    if (crafted.getType() != Material.AIR) {
+                        BlockMenuUtil.pushItem(blockMenu, crafted, OUTPUT_SLOT);
+                    }
+                    sendFeedback(menuLocation, FeedbackType.WORKING);
+                    return true;
+                });
+            });
+        });
+    }
+
+    private CompletableFuture<Boolean> hasRequiredItemsAsync(
+        @NotNull NetworkRoot root,
+        @NotNull Map<ItemStack, Integer> requiredItems) {
+        CompletableFuture<Boolean> chain = CompletableFuture.completedFuture(true);
+        for (Map.Entry<ItemStack, Integer> entry : requiredItems.entrySet()) {
+            final ItemStack itemStack = entry.getKey();
+            final int amount = entry.getValue();
+            chain = chain.thenCompose(hasItems -> {
+                if (!Boolean.TRUE.equals(hasItems)) {
+                    return CompletableFuture.completedFuture(false);
+                }
+                return root.containsAsync(new ItemRequest(itemStack, amount));
+            });
+        }
+        return chain;
+    }
+
+    private CompletableFuture<ItemStack[]> fetchRecipeItemsAsync(
+        @NotNull BlockMenu blockMenu,
+        @NotNull NetworkRoot root,
+        @NotNull Location menuLocation,
+        @NotNull BlueprintInstance instance,
+        int blueprintAmount,
+        int index,
+        @NotNull ItemStack[] fetchedItems) {
+        if (index >= 9) {
+            return CompletableFuture.completedFuture(fetchedItems);
         }
 
-        // Push item
-        final Location location = blockMenu.getLocation().clone().add(0.5, 1.1, 0.5);
-        if (root.isDisplayParticles()) {
-            location.getWorld().spawnParticle(Particle.WAX_OFF, location, 0, 0, 4, 0);
+        final ItemStack requested = instance.getRecipeItems()[index];
+        if (requested == null) {
+            return fetchRecipeItemsAsync(blockMenu, root, menuLocation, instance, blueprintAmount, index + 1, fetchedItems);
         }
 
-        ItemStack crafted = instance.getItemStack().clone();
-
-        crafted.setAmount(crafted.getAmount() * blueprintAmount);
-
-        if (crafted.getAmount() > crafted.getMaxStackSize()) {
-            returnItems(root, fetcheds, blockMenu);
-            sendDebugMessage(blockMenu.getLocation(), "Result is too large");
-            sendFeedback(blockMenu.getLocation(), FeedbackType.RESULT_IS_TOO_LARGE);
-            return false;
-        }
-
-        if (existing != null && existing.getType() != Material.AIR) {
-            root.addItemStack0(blockMenu.getLocation(), crafted);
-        }
-        if (crafted != null && crafted.getType() != Material.AIR) {
-            BlockMenuUtil.pushItem(blockMenu, crafted, OUTPUT_SLOT);
-        }
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-        return true;
+        final int requestedAmount = requested.getAmount() * blueprintAmount;
+        return root.getItemStack0Async(menuLocation, new ItemRequest(requested, requestedAmount)).thenCompose(fetched -> {
+            fetchedItems[index] = fetched;
+            if (fetched == null || fetched.getAmount() < requestedAmount) {
+                return FoliaSupport.supplyRegion(menuLocation, () -> {
+                    returnItems(root, fetchedItems, blockMenu);
+                    return (ItemStack[]) null;
+                });
+            }
+            return fetchRecipeItemsAsync(blockMenu, root, menuLocation, instance, blueprintAmount, index + 1, fetchedItems);
+        });
     }
 
     protected void returnItems(
         @NotNull NetworkRoot root, @Nullable ItemStack @NotNull [] inputs, @NotNull BlockMenu blockMenu) {
         for (ItemStack input : inputs) {
             if (input != null) {
-                root.addItemStack0(blockMenu.getLocation(), input);
+                root.addItemStack0Async(blockMenu.getLocation(), input);
             }
         }
     }

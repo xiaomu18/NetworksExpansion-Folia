@@ -544,7 +544,15 @@ public class HangingGridNewStyle extends NetworkGridNewStyle implements HangingB
         @NotNull Location attachon,
         BlockFace attachSide) {
         if (itemStack != null && itemStack.getType() != Material.AIR) {
-            root.addItemStack0(blockMenu.getLocation(), itemStack);
+            final ItemStack transfer = itemStack.clone();
+            final int originalAmount = transfer.getAmount();
+            root.addItemStack0Async(blockMenu.getLocation(), transfer).whenComplete((ignored, throwable) ->
+                FoliaSupport.runRegion(blockMenu.getLocation(), () -> {
+                    final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                    if (moved > 0 && itemStack.getType() != Material.AIR) {
+                        itemStack.setAmount(Math.max(0, itemStack.getAmount() - moved));
+                    }
+                }));
         }
     }
 }

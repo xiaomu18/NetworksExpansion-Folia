@@ -32,6 +32,18 @@ public class NetworkWirelessConfigurator extends SpecialSlimefunItem {
         return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
     }
 
+    private static void runAtTargetRegion(@NotNull Block block, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(block)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(block.getLocation(), runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public NetworkWirelessConfigurator(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -43,50 +55,48 @@ public class NetworkWirelessConfigurator extends SpecialSlimefunItem {
             final Optional<Block> optional = e.getClickedBlock();
             if (optional.isPresent()) {
                 final Block block = optional.get();
-                if (!canDirectlyAccess(block)) {
-                    player.sendMessage("§cFolia 下无法直接配置另一个 region 中的方块");
-                    e.cancel();
-                    return;
-                }
-                final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
-                if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)) {
-                    final ItemStack heldItem = player.getInventory().getItemInMainHand();
-                    final BlockMenu blockMenu = StorageCacheUtils.getMenu(block.getLocation());
-                    if (blockMenu == null) {
-                        player.sendMessage(Lang.getString(
-                            "messages.unsupported-operation.wireless_configurator.not_network_wireless_block"));
-                        return;
-                    }
-                    if (slimefunItem instanceof NetworkWirelessTransmitter transmitter && player.isSneaking()) {
-                        setTransmitter(transmitter, heldItem, blockMenu, player);
-                    } else if (slimefunItem instanceof NetworkWirelessReceiver && !player.isSneaking()) {
-                        setReceiver(heldItem, blockMenu, player);
-                    } else if (slimefunItem instanceof AdvancedWirelessTransmitter w) {
-                        final ItemMeta itemMeta = heldItem.getItemMeta();
-                        Location location = PersistentDataAPI.get(itemMeta, Keys.TARGET_LOCATION, DataType.LOCATION);
-                        if (location == null) {
-                            location = PersistentDataAPI.get(itemMeta, Keys.TARGET_LOCATION2, DataType.LOCATION);
-                        }
-
-                        if (location == null) {
-                            location = PersistentDataAPI.get(itemMeta, Keys.TARGET_LOCATION3, DataType.LOCATION);
-                        }
-
-                        if (location == null) {
-                            player.sendMessage(
-                                Lang.getString("messages.unsupported-operation.wireless_configurator.no_target_location"));
+                final boolean sneaking = player.isSneaking();
+                runAtTargetRegion(block, () -> {
+                    final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+                    if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)) {
+                        final ItemStack heldItem = player.getInventory().getItemInMainHand();
+                        final BlockMenu blockMenu = StorageCacheUtils.getMenu(block.getLocation());
+                        if (blockMenu == null) {
+                            sendPlayerMessage(player, Lang.getString(
+                                "messages.unsupported-operation.wireless_configurator.not_network_wireless_block"));
                             return;
                         }
+                        if (slimefunItem instanceof NetworkWirelessTransmitter transmitter && sneaking) {
+                            setTransmitter(transmitter, heldItem, blockMenu, player);
+                        } else if (slimefunItem instanceof NetworkWirelessReceiver && !sneaking) {
+                            setReceiver(heldItem, blockMenu, player);
+                        } else if (slimefunItem instanceof AdvancedWirelessTransmitter w) {
+                            final ItemMeta itemMeta = heldItem.getItemMeta();
+                            Location location = PersistentDataAPI.get(itemMeta, Keys.TARGET_LOCATION, DataType.LOCATION);
+                            if (location == null) {
+                                location = PersistentDataAPI.get(itemMeta, Keys.TARGET_LOCATION2, DataType.LOCATION);
+                            }
 
-                        w.setTargetLocation(block.getLocation(), player, location);
-                        player.sendMessage(String.format(Lang.getString("messages.completed-operation.wireless_configurator.set_location"), AdvancedWirelessTransmitter.string(block.getLocation()), AdvancedWirelessTransmitter.string(location)));
+                            if (location == null) {
+                                location = PersistentDataAPI.get(itemMeta, Keys.TARGET_LOCATION3, DataType.LOCATION);
+                            }
+
+                            if (location == null) {
+                                sendPlayerMessage(player,
+                                    Lang.getString("messages.unsupported-operation.wireless_configurator.no_target_location"));
+                                return;
+                            }
+
+                            w.setTargetLocation(block.getLocation(), player, location);
+                            sendPlayerMessage(player, String.format(Lang.getString("messages.completed-operation.wireless_configurator.set_location"), AdvancedWirelessTransmitter.string(block.getLocation()), AdvancedWirelessTransmitter.string(location)));
+                        } else {
+                            sendPlayerMessage(player, Lang.getString(
+                                "messages.unsupported-operation.wireless_configurator.not_network_wireless_block"));
+                        }
                     } else {
-                        player.sendMessage(Lang.getString(
-                            "messages.unsupported-operation.wireless_configurator.not_network_wireless_block"));
+                        sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.comprehensive.no_permission"));
                     }
-                } else {
-                    player.sendMessage(Lang.getString("messages.unsupported-operation.comprehensive.no_permission"));
-                }
+                });
             }
             e.cancel();
         });
@@ -108,18 +118,18 @@ public class NetworkWirelessConfigurator extends SpecialSlimefunItem {
         }
 
         if (location == null) {
-            player.sendMessage(
+            sendPlayerMessage(player,
                 Lang.getString("messages.unsupported-operation.wireless_configurator.no_target_location"));
             return;
         }
 
         if (location.getWorld() != blockMenu.getLocation().getWorld()) {
-            player.sendMessage(Lang.getString("messages.unsupported-operation.wireless_configurator.not_same_world"));
+            sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.wireless_configurator.not_same_world"));
             return;
         }
 
         transmitter.addLinkedLocation(blockMenu.getBlock(), location);
-        player.sendMessage(Lang.getString("messages.completed-operation.wireless_configurator.transmitter_linked"));
+        sendPlayerMessage(player, Lang.getString("messages.completed-operation.wireless_configurator.transmitter_linked"));
     }
 
     private void setReceiver(@NotNull ItemStack itemStack, @NotNull BlockMenu blockMenu, @NotNull Player player) {
@@ -127,6 +137,6 @@ public class NetworkWirelessConfigurator extends SpecialSlimefunItem {
         final ItemMeta itemMeta = itemStack.getItemMeta();
         PersistentDataAPI.set(itemMeta, Keys.TARGET_LOCATION, DataType.LOCATION, location);
         itemStack.setItemMeta(itemMeta);
-        player.sendMessage(Lang.getString("messages.completed-operation.wireless_configurator.receiver_set"));
+        sendPlayerMessage(player, Lang.getString("messages.completed-operation.wireless_configurator.receiver_set"));
     }
 }

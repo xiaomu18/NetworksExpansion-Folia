@@ -4,6 +4,7 @@ import com.balugaq.netex.api.enums.FeedbackType;
 import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import dev.sefiraat.sefilib.misc.ParticleUtils;
 import dev.sefiraat.sefilib.world.LocationUtils;
 import io.github.sefiraat.networks.NetworkStorage;
@@ -157,25 +158,27 @@ public class NetworkControlX extends NetworkDirectional implements SoftCellBanna
          */
 
         final ItemStack resultStack = new ItemStack(material, 1);
+        definition.getNode().getRoot().addItemStack0Async(blockMenu.getLocation(), resultStack).whenComplete((ignored, throwable) ->
+            FoliaSupport.runRegion(blockMenu.getLocation(), () -> {
+                if (resultStack.getAmount() != 0) {
+                    return;
+                }
 
-        definition.getNode().getRoot().addItemStack0(blockMenu.getLocation(), resultStack);
+                this.blockCache.add(targetPosition);
 
-        if (resultStack.getAmount() == 0) {
-            this.blockCache.add(targetPosition);
+                final BlockStateSnapshotResult blockState = PaperLib.getBlockState(targetBlock, true);
 
-            final BlockStateSnapshotResult blockState = PaperLib.getBlockState(targetBlock, true);
+                if (blockState.getState() instanceof InventoryHolder) {
+                    sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_CUT);
+                    return;
+                }
 
-            if (blockState.getState() instanceof InventoryHolder) {
-                sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_CUT);
-                return;
-            }
-
-            targetBlock.setType(Material.AIR, true);
-            ParticleUtils.displayParticleRandomly(
-                LocationUtils.centre(targetBlock.getLocation()), 1, 5, DUST_OPTIONS);
-            definition.getNode().getRoot().removeRootPower(REQUIRED_POWER);
-            sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-        }
+                targetBlock.setType(Material.AIR, true);
+                ParticleUtils.displayParticleRandomly(
+                    LocationUtils.centre(targetBlock.getLocation()), 1, 5, DUST_OPTIONS);
+                definition.getNode().getRoot().removeRootPower(REQUIRED_POWER);
+                sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+            }));
     }
 
     @Override

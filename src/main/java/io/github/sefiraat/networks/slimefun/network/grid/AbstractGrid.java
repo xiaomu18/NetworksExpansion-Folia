@@ -51,6 +51,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"DuplicatedCode", "deprecation"})
@@ -112,6 +114,7 @@ public abstract class AbstractGrid extends NetworkObject {
                     tryAddItem(blockMenu);
                     GridCache cache = getCacheMap().get(location);
                     cache.setEntriesCache(null);
+                    cache.setEntriesFuture(null);
                     updateDisplay(blockMenu);
                 }
                 tickMap.put(location, tick <= 1 ? tickRate.getValue() : tick - 1);
@@ -151,7 +154,21 @@ public abstract class AbstractGrid extends NetworkObject {
             return;
         }
 
-        definition.getNode().getRoot().addItemStack(itemStack);
+        final ItemStack transfer = itemStack.clone();
+        final int originalAmount = transfer.getAmount();
+        definition.getNode().getRoot().addItemStack0Async(blockMenu.getLocation(), transfer).thenRun(() -> {
+            final int moved = Math.max(0, originalAmount - transfer.getAmount());
+            if (moved <= 0) {
+                return;
+            }
+
+            FoliaSupport.runRegion(blockMenu.getLocation(), () -> {
+                final ItemStack live = blockMenu.getItemInSlot(getInputSlot());
+                if (live != null && live.getType() != Material.AIR && StackUtils.itemsMatch(live, transfer, true, false)) {
+                    live.setAmount(Math.max(0, live.getAmount() - moved));
+                }
+            });
+        });
     }
 
     public ItemStack getFilterStack(@Nullable String filter) {
@@ -275,29 +292,44 @@ public abstract class AbstractGrid extends NetworkObject {
         if (cache.getEntriesCache() != null) {
             return cache.getEntriesCache();
         }
-        var entries = networkRoot.getAllNetworkItemsLongType().entrySet().stream()
-            .filter(entry -> {
-                if (cache.getFilter() == null) {
-                    return true;
-                }
+        CompletableFuture<List<Map.Entry<ItemStack, Long>>> entriesFuture = cache.getEntriesFuture();
+        if (entriesFuture == null) {
+            cache.setEntriesFuture(networkRoot.getAllNetworkItemsLongTypeAsync().thenApply(itemStacks -> itemStacks.entrySet().stream()
+                .filter(entry -> {
+                    if (cache.getFilter() == null) {
+                        return true;
+                    }
 
-                final ItemStack itemStack = entry.getKey();
-                String name = TextUtil.stripColor(
-                    ItemStackHelper.getDisplayName(itemStack).toLowerCase(Locale.ROOT));
-                if (cache.getFilter().matches("^[a-zA-Z]+$")) {
-                    final String pinyinName = PinyinHelper.toPinyin(name, PinyinStyleEnum.INPUT, "");
-                    final String pinyinFirstLetter = PinyinHelper.toPinyin(name, PinyinStyleEnum.FIRST_LETTER, "");
-                    return name.contains(cache.getFilter())
-                        || pinyinName.contains(cache.getFilter())
-                        || pinyinFirstLetter.contains(cache.getFilter());
-                } else {
-                    return name.contains(cache.getFilter());
-                }
-            })
-            .sorted(SORT_MAP.get(cache.getSortOrder()))
-            .toList();
-        cache.setEntriesCache(entries);
-        return entries;
+                    final ItemStack itemStack = entry.getKey();
+                    String name = TextUtil.stripColor(
+                        ItemStackHelper.getDisplayName(itemStack).toLowerCase(Locale.ROOT));
+                    if (cache.getFilter().matches("^[a-zA-Z]+$")) {
+                        final String pinyinName = PinyinHelper.toPinyin(name, PinyinStyleEnum.INPUT, "");
+                        final String pinyinFirstLetter = PinyinHelper.toPinyin(name, PinyinStyleEnum.FIRST_LETTER, "");
+                        return name.contains(cache.getFilter())
+                            || pinyinName.contains(cache.getFilter())
+                            || pinyinFirstLetter.contains(cache.getFilter());
+                    } else {
+                        return name.contains(cache.getFilter());
+                    }
+                })
+                .sorted(SORT_MAP.get(cache.getSortOrder()))
+                .toList()));
+            return List.of();
+        }
+
+        if (!entriesFuture.isDone()) {
+            return List.of();
+        }
+
+        cache.setEntriesFuture(null);
+        try {
+            List<Map.Entry<ItemStack, Long>> entries = entriesFuture.join();
+            cache.setEntriesCache(entries);
+            return entries;
+        } catch (CompletionException ignored) {
+            return List.of();
+        }
     }
 
     protected void setFilter(
@@ -389,15 +421,26 @@ public abstract class AbstractGrid extends NetworkObject {
         clone.setItemMeta(cloneMeta);
 
         NetworkRoot root = definition.getNode().getRoot();
-        boolean success = root.refreshRootItems();
-        if (!success) {
-            return;
-        }
 
         final ItemStack cursor = player.getItemOnCursor();
         if (cursor.getType() != Material.AIR
             && !StackUtils.itemsMatch(clone, StackUtils.getAsQuantity(player.getItemOnCursor(), 1))) {
-            root.addItemStack(player.getItemOnCursor());
+            final ItemStack transfer = cursor.clone();
+            final int originalAmount = transfer.getAmount();
+            root.addItemStack0Async(blockMenu.getLocation(), transfer).thenRun(() -> {
+                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                if (moved <= 0) {
+                    return;
+                }
+
+                FoliaSupport.runPlayer(player, () -> {
+                    final ItemStack liveCursor = player.getItemOnCursor();
+                    if (liveCursor.getType() != Material.AIR && StackUtils.itemsMatch(liveCursor, transfer, true, false)) {
+                        liveCursor.setAmount(Math.max(0, liveCursor.getAmount() - moved));
+                    }
+                });
+                FoliaSupport.runRegion(blockMenu.getLocation(), () -> updateDisplay(blockMenu));
+            });
             return;
         }
 
@@ -422,17 +465,25 @@ public abstract class AbstractGrid extends NetworkObject {
     @ParametersAreNonnullByDefault
     private void addToInventory(
         Player player, NodeDefinition definition, GridItemRequest request, ClickAction action, BlockMenu menu) {
-        ItemStack requestingStack = definition.getNode().getRoot().getItemStack0(menu.getLocation(), request);
+        final Location menuLocation = menu.getLocation();
+        final NetworkRoot root = definition.getNode().getRoot();
+        root.refreshRootItemsAsync().thenCompose(success ->
+            Boolean.TRUE.equals(success)
+                ? root.getItemStack0Async(menuLocation, request)
+                : CompletableFuture.completedFuture(null)).thenAccept(requestingStack -> {
+            if (requestingStack == null) {
+                return;
+            }
 
-        if (requestingStack == null) {
-            return;
-        }
-
-        HashMap<Integer, ItemStack> remnant = InventoryUtil.addItem(player, requestingStack);
-        requestingStack = remnant.values().stream().findFirst().orElse(null);
-        if (requestingStack != null) {
-            definition.getNode().getRoot().addItemStack(requestingStack);
-        }
+            FoliaSupport.runPlayer(player, () -> {
+                HashMap<Integer, ItemStack> remnant = InventoryUtil.addItem(player, requestingStack);
+                ItemStack remainder = remnant.values().stream().findFirst().orElse(null);
+                if (remainder != null) {
+                    root.addItemStack0Async(menuLocation, remainder);
+                }
+            });
+            FoliaSupport.runRegion(menuLocation, () -> updateDisplay(menu));
+        });
     }
 
     @SuppressWarnings("deprecation")
@@ -450,8 +501,18 @@ public abstract class AbstractGrid extends NetworkObject {
             return;
         }
 
-        ItemStack requestingStack = definition.getNode().getRoot().getItemStack0(menu.getLocation(), request);
-        setCursor(player, cursor, requestingStack);
+        final NetworkRoot root = definition.getNode().getRoot();
+        root.refreshRootItemsAsync().thenCompose(success ->
+            Boolean.TRUE.equals(success)
+                ? root.getItemStack0Async(menu.getLocation(), request)
+                : CompletableFuture.completedFuture(null)).thenAccept(requestingStack -> {
+            if (requestingStack == null) {
+                return;
+            }
+
+            FoliaSupport.runPlayer(player, () -> setCursor(player, cursor, requestingStack));
+            FoliaSupport.runRegion(menu.getLocation(), () -> updateDisplay(menu));
+        });
     }
 
     private void setCursor(@NotNull Player player, @NotNull ItemStack cursor, @Nullable ItemStack requestingStack) {
@@ -564,7 +625,20 @@ public abstract class AbstractGrid extends NetworkObject {
         ClickAction action,
         @NotNull BlockMenu blockMenu) {
         if (itemStack != null && itemStack.getType() != Material.AIR && !StackUtils.isBlacklisted(itemStack)) {
-            root.addItemStack(itemStack);
+            final ItemStack transfer = itemStack.clone();
+            final int originalAmount = transfer.getAmount();
+            root.addItemStack0Async(blockMenu.getLocation(), transfer).thenRun(() -> {
+                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                if (moved <= 0) {
+                    return;
+                }
+
+                FoliaSupport.runPlayer(player, () -> {
+                    if (itemStack.getType() != Material.AIR && StackUtils.itemsMatch(itemStack, transfer, true, false)) {
+                        itemStack.setAmount(Math.max(0, itemStack.getAmount() - moved));
+                    }
+                });
+            });
         }
     }
 

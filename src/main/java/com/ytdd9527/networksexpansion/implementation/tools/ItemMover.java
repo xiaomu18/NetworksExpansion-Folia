@@ -65,6 +65,18 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
         return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
+    private static void runAtTargetRegion(@NotNull Location location, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(location)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(location, runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
     public ItemMover(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -99,20 +111,16 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
                     return;
                 }
                 final Location location = optional.get().getLocation();
-                if (!canDirectlyAccess(location)) {
-                    player.sendMessage("§cFolia 下无法直接操作另一个 region 中的存储");
-                    e.cancel();
-                    return;
-                }
-                if (hasPermission(player, location)) {
-                    if (!player.isSneaking()) {
-                        // Right-click
-                        tryDepositIntoMover(player, itemStack, location);
-                    } else {
-                        // Shift+Right-click
-                        tryWithdrawFromMover(player, itemStack, location);
+                final boolean sneaking = player.isSneaking();
+                runAtTargetRegion(location, () -> {
+                    if (hasPermission(player, location)) {
+                        if (!sneaking) {
+                            tryDepositIntoMover(player, itemStack, location);
+                        } else {
+                            tryWithdrawFromMover(player, itemStack, location);
+                        }
                     }
-                }
+                });
             }
             e.cancel();
         });
@@ -417,17 +425,20 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
         ItemStack fetched = barrel.requestItem(itemRequest);
 
         if (fetched == null || fetched.getType() == Material.AIR) {
-            player.sendMessage(Lang.getString("messages.unsupported-operation.item_mover.invalid_item"));
+            sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.item_mover.invalid_item"));
             return;
         }
 
-        int before = fetched.getAmount();
-        String name = ItemStackHelper.getDisplayName(fetched);
-        depositItem(mover, fetched);
-        int after = fetched.getAmount();
-        player.sendMessage(String.format(
-            Lang.getString("messages.completed-operation.item_mover.deposit_success"), name, before - after));
-        updateLore(mover);
+        final ItemStack fetchedItem = fetched;
+        final int before = fetchedItem.getAmount();
+        final String name = ItemStackHelper.getDisplayName(fetchedItem);
+        FoliaSupport.runPlayer(player, () -> {
+            depositItem(mover, fetchedItem);
+            int after = fetchedItem.getAmount();
+            player.sendMessage(String.format(
+                Lang.getString("messages.completed-operation.item_mover.deposit_success"), name, before - after));
+            updateLore(mover);
+        });
     }
 
     private static void tryWithdrawFromMover(
@@ -461,10 +472,13 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
         int before = clone.getAmount();
         barrel.depositItemStack(clone);
         int after = clone.getAmount();
-        setStoredAmount(mover, storedAmountLong - (before - after));
-        player.sendMessage(String.format(
-            Lang.getString("messages.completed-operation.item_mover.withdraw_success"), name, before - after));
-        updateLore(mover);
+        final int moved = before - after;
+        FoliaSupport.runPlayer(player, () -> {
+            setStoredAmount(mover, storedAmountLong - moved);
+            player.sendMessage(String.format(
+                Lang.getString("messages.completed-operation.item_mover.withdraw_success"), name, moved));
+            updateLore(mover);
+        });
     }
 
     private static @NotNull List<String> cloneDefaultLore() {

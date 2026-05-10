@@ -3,9 +3,11 @@ package io.github.sefiraat.networks.slimefun.network;
 import com.balugaq.netex.api.enums.FeedbackType;
 import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
+import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.thebusybiscuit.slimefun4.api.items.ItemGroup;
 import io.github.thebusybiscuit.slimefun4.api.items.SlimefunItemStack;
 import io.github.thebusybiscuit.slimefun4.api.recipes.RecipeType;
@@ -20,8 +22,12 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 @SuppressWarnings("DuplicatedCode")
 public class NetworkGrabber extends NetworkDirectional implements SoftCellBannable {
+    private static final Set<org.bukkit.Location> PENDING_GRABS = ConcurrentHashMap.newKeySet();
 
     public NetworkGrabber(
         @NotNull ItemGroup itemGroup,
@@ -40,14 +46,16 @@ public class NetworkGrabber extends NetworkDirectional implements SoftCellBannab
     }
 
     private void tryGrabItem(@NotNull BlockMenu blockMenu) {
+        final org.bukkit.Location menuLocation = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
         if (definition == null || definition.getNode() == null) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_NETWORK_FOUND);
+            sendFeedback(menuLocation, FeedbackType.NO_NETWORK_FOUND);
             return;
         }
 
-        if (checkSoftCellBan(blockMenu.getLocation(), definition.getNode().getRoot())) {
+        final NetworkRoot root = definition.getNode().getRoot();
+        if (checkSoftCellBan(menuLocation, root)) {
             return;
         }
 
@@ -71,13 +79,31 @@ public class NetworkGrabber extends NetworkDirectional implements SoftCellBannab
             final ItemStack itemStack = targetMenu.getItemInSlot(slot);
 
             if (itemStack != null && itemStack.getType() != Material.AIR) {
-                int before = itemStack.getAmount();
-                definition.getNode().getRoot().addItemStack0(blockMenu.getLocation(), itemStack);
-                sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-                if (definition.getNode().getRoot().isDisplayParticles() && itemStack.getAmount() < before) {
-                    showParticle(blockMenu.getLocation(), direction);
+                if (!PENDING_GRABS.add(menuLocation)) {
+                    return;
                 }
-                break;
+
+                final int targetSlot = slot;
+                final ItemStack transfer = itemStack.clone();
+                final int originalAmount = transfer.getAmount();
+                root.addItemStack0Async(menuLocation, transfer).whenComplete((ignored, throwable) ->
+                    FoliaSupport.runRegion(targetMenu.getLocation(), () -> {
+                        final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                        if (moved > 0) {
+                            final ItemStack live = targetMenu.getItemInSlot(targetSlot);
+                            if (live != null && live.getType() != Material.AIR) {
+                                live.setAmount(Math.max(0, live.getAmount() - moved));
+                            }
+                        }
+                        FoliaSupport.runRegion(menuLocation, () -> {
+                            PENDING_GRABS.remove(menuLocation);
+                            sendFeedback(menuLocation, FeedbackType.WORKING);
+                            if (root.isDisplayParticles() && moved > 0) {
+                                showParticle(menuLocation, direction);
+                            }
+                        });
+                    }));
+                return;
             }
         }
     }

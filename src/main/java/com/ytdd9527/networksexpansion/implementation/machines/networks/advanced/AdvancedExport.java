@@ -7,6 +7,7 @@ import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -29,6 +30,7 @@ import me.mrCookieSlime.Slimefun.Objects.handlers.BlockTicker;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenu;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenuPreset;
 import me.mrCookieSlime.Slimefun.api.item_transport.ItemTransportFlow;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
@@ -39,6 +41,7 @@ import org.jetbrains.annotations.NotNull;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class AdvancedExport extends NetworkObject implements RecipeDisplayItem {
@@ -57,6 +60,7 @@ public class AdvancedExport extends NetworkObject implements RecipeDisplayItem {
     private static final int[] OUTPUT_ITEM_BACKDROP = {49};
     private final int lockModeSlot = 26;
     private final @NotNull ItemSetting<Integer> tickRate;
+    private final Map<Location, Boolean> pendingFetches = new ConcurrentHashMap<>();
 
     public AdvancedExport(
         @NotNull ItemGroup itemGroup,
@@ -118,6 +122,7 @@ public class AdvancedExport extends NetworkObject implements RecipeDisplayItem {
     }
 
     private void tryFetchItem(@NotNull BlockMenu blockMenu) {
+        final Location location = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
         if (definition == null || definition.getNode() == null) {
             sendFeedback(blockMenu.getLocation(), FeedbackType.NO_NETWORK_FOUND);
@@ -157,16 +162,28 @@ public class AdvancedExport extends NetworkObject implements RecipeDisplayItem {
             return;
         }
 
-        // fetch items from network
-        ItemStack fetched;
+        if (pendingFetches.putIfAbsent(location, Boolean.TRUE) != null) {
+            return;
+        }
+
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+        List<ItemStack> fetchedStacks = new ArrayList<>();
         for (ItemRequest itemRequest : itemRequests) {
-            fetched = networkRoot.getItemStack0(blockMenu.getLocation(), itemRequest); // fetch item from network
-            if (fetched != null) {
-                // amount may not be excepted, but it is the max amount we can fetch.
+            chain = chain.thenCompose(ignored -> networkRoot.getItemStack0Async(location, itemRequest)
+                .thenAccept(fetched -> {
+                    if (fetched != null && fetched.getType() != Material.AIR) {
+                        fetchedStacks.add(fetched);
+                    }
+                }));
+        }
+
+        chain.whenComplete((ignored, throwable) -> FoliaSupport.runRegion(location, () -> {
+            pendingFetches.remove(location);
+            for (ItemStack fetched : fetchedStacks) {
                 placeItems(networkRoot, blockMenu, fetched.clone(), fetched.getAmount(), getOutputSlots());
             }
-        }
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+            sendFeedback(location, FeedbackType.WORKING);
+        }));
     }
 
     private void placeItems(
@@ -183,7 +200,7 @@ public class AdvancedExport extends NetworkObject implements RecipeDisplayItem {
     }
 
     private void returnItems(@NotNull NetworkRoot root, @NotNull ItemStack itemStack, @NotNull BlockMenu blockMenu) {
-        root.addItemStack0(blockMenu.getLocation(), itemStack);
+        root.addItemStack0Async(blockMenu.getLocation(), itemStack);
     }
 
     @Override

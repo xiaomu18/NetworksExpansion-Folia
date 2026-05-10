@@ -3,6 +3,7 @@ package com.ytdd9527.networksexpansion.implementation.machines.networks.advanced
 import com.balugaq.netex.api.interfaces.HangingBlock;
 import com.balugaq.netex.utils.InventoryUtil;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import com.ytdd9527.networksexpansion.utils.databases.DataSource;
 import io.github.sefiraat.networks.NetworkStorage;
@@ -37,6 +38,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.annotation.ParametersAreNonnullByDefault;
+import java.util.concurrent.CompletableFuture;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"deprecation", "DuplicatedCode"})
 public class SwitchingMonitor extends NetworkObject implements HangingBlock, Placeable {
@@ -48,6 +52,7 @@ public class SwitchingMonitor extends NetworkObject implements HangingBlock, Pla
     public static final long T = B * K;
     public static final long Q = T * K;
     public static final double FIX_OFFSET = HangingBlock.ITEM_FRAME_OFFSET - HangingBlock.CENTER_OFFSET;
+    private final Set<Location> pendingUpdates = ConcurrentHashMap.newKeySet();
 
     public SwitchingMonitor(
         @NotNull ItemGroup itemGroup,
@@ -198,36 +203,79 @@ public class SwitchingMonitor extends NetworkObject implements HangingBlock, Pla
                 return;
             }
 
-            if (shift) {
-                ItemStack result = root.getItemStack0(attachon, new ItemRequest(template, amount));
-                if (result != null) {
-                    InventoryUtil.addItem(player, result).values().forEach(item -> root.addItemStack0(attachon, item));
+            int requestAmount = shift ? amount : Math.min(amount, template.getMaxStackSize());
+            root.getItemStack0Async(attachon, new ItemRequest(template, requestAmount)).thenAccept(result -> {
+                if (result == null) {
+                    return;
                 }
-            } else {
-                ItemStack result = root.getItemStack0(
-                    attachon, new ItemRequest(template, Math.min(amount, template.getMaxStackSize())));
-                if (result != null) {
-                    InventoryUtil.addItem(player, result).values().forEach(item -> root.addItemStack0(attachon, item));
-                }
-            }
+
+                FoliaSupport.runPlayer(player, () -> {
+                    var remainder = InventoryUtil.addItem(player, result);
+                    if (remainder.isEmpty()) {
+                        return;
+                    }
+
+                    FoliaSupport.runRegion(
+                        attachon,
+                        () -> remainder.values().forEach(item -> root.addItemStack0Async(attachon, item)));
+                });
+            });
         } else {
             if (shift) {
-                for (ItemStack item : player.getInventory().getStorageContents()) {
-                    if (item != null
-                        && item.getType() != Material.AIR
-                        && StackUtils.itemsMatch(item, template, true, false)) {
-                        int before = item.getAmount();
-                        root.addItemStack0(attachon, item);
-                        int after = item.getAmount();
-                        if (before == after) {
-                            break;
-                        }
-                    }
-                }
+                depositMatchingItemsAsync(player, root, attachon, player.getInventory().getStorageContents(), 0, template);
             } else {
-                root.addItemStack0(attachon, hand);
+                depositPlayerItemAsync(player, root, attachon, hand, true);
             }
         }
+    }
+
+    private CompletableFuture<Void> depositMatchingItemsAsync(
+        @NotNull Player player,
+        @NotNull NetworkRoot root,
+        @NotNull Location attachon,
+        ItemStack @NotNull [] contents,
+        int index,
+        @NotNull ItemStack template) {
+        if (index >= contents.length) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final ItemStack item = contents[index];
+        if (item == null || item.getType() == Material.AIR || !StackUtils.itemsMatch(item, template, true, false)) {
+            return depositMatchingItemsAsync(player, root, attachon, contents, index + 1, template);
+        }
+
+        return depositPlayerItemAsync(player, root, attachon, item, false).thenCompose(moved -> {
+            if (moved <= 0) {
+                return CompletableFuture.completedFuture(null);
+            }
+            return depositMatchingItemsAsync(player, root, attachon, contents, index + 1, template);
+        });
+    }
+
+    private CompletableFuture<Integer> depositPlayerItemAsync(
+        @NotNull Player player,
+        @NotNull NetworkRoot root,
+        @NotNull Location attachon,
+        @Nullable ItemStack source,
+        boolean updateMainHand) {
+        if (source == null || source.getType() == Material.AIR) {
+            return CompletableFuture.completedFuture(0);
+        }
+
+        final ItemStack transfer = source.clone();
+        final int originalAmount = transfer.getAmount();
+        return root.addItemStack0Async(attachon, transfer).thenCompose(ignored ->
+            FoliaSupport.supplyRegion(player.getLocation(), () -> {
+                final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                if (moved > 0) {
+                    source.setAmount(Math.max(0, source.getAmount() - moved));
+                    if (updateMainHand) {
+                        player.getInventory().setItemInMainHand(source.getAmount() > 0 ? source : null);
+                    }
+                }
+                return moved;
+            }));
     }
 
     public int calculateSpace(@NotNull Player player, @NotNull ItemStack template) {
@@ -257,9 +305,17 @@ public class SwitchingMonitor extends NetworkObject implements HangingBlock, Pla
         }
 
         template = uniconize(template);
-
-        long amount = root.getAllNetworkItemsLongType().getOrDefault(template, 0L);
-        entityBlock.setItem(iconize(template, amount), false);
+        if (!pendingUpdates.add(attachon)) {
+            return;
+        }
+        final ItemStack queryTemplate = template.clone();
+        root.getAllNetworkItemsLongTypeAsync().whenComplete((items, throwable) -> {
+            long amount = items == null ? 0L : items.getOrDefault(queryTemplate, 0L);
+            FoliaSupport.runEntity(entityBlock, () -> {
+                pendingUpdates.remove(attachon);
+                entityBlock.setItem(iconize(queryTemplate, amount), false);
+            }, () -> pendingUpdates.remove(attachon));
+        });
     }
 
     @Override

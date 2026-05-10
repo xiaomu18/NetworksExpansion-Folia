@@ -6,6 +6,7 @@ import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.gmail.nossr50.mcMMO;
 import dev.sefiraat.sefilib.misc.ParticleUtils;
 import dev.sefiraat.sefilib.world.LocationUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.managers.SupportedPluginManager;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -23,6 +24,7 @@ import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.Location;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -47,6 +49,7 @@ public class NetworkControlV extends NetworkDirectional implements SoftCellBanna
     private static final int DOWN_SLOT = 32;
     private static final int REQUIRED_POWER = 100;
     private final Set<BlockPosition> blockCache = ConcurrentHashMap.newKeySet();
+    private final Set<Location> pendingPlacements = ConcurrentHashMap.newKeySet();
 
     public NetworkControlV(
         @NotNull ItemGroup itemGroup,
@@ -72,6 +75,7 @@ public class NetworkControlV extends NetworkDirectional implements SoftCellBanna
 
     @SuppressWarnings({"deprecation", "removal"})
     private void tryPasteBlock(@NotNull BlockMenu blockMenu) {
+        final Location menuLocation = blockMenu.getLocation();
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
         if (definition == null || definition.getNode() == null) {
@@ -153,25 +157,35 @@ public class NetworkControlV extends NetworkDirectional implements SoftCellBanna
         }
 
         final ItemRequest request = new ItemRequest(templateStack.clone(), 1);
-        final ItemStack fetchedStack = definition.getNode().getRoot().getItemStack0(blockMenu.getLocation(), request);
-
-        if (fetchedStack == null || fetchedStack.getAmount() < 1) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NOT_ENOUGH_RESOURCES);
+        if (!pendingPlacements.add(menuLocation)) {
             return;
         }
+        definition.getNode().getRoot().getItemStack0Async(menuLocation, request).whenComplete((fetchedStack, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> {
+                pendingPlacements.remove(menuLocation);
+                if (fetchedStack == null || fetchedStack.getAmount() < 1) {
+                    sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_RESOURCES);
+                    return;
+                }
+                if (targetBlock.getType() != Material.AIR) {
+                    definition.getNode().getRoot().addItemStack0Async(menuLocation, fetchedStack);
+                    sendFeedback(menuLocation, FeedbackType.BLOCK_CANNOT_BE_AIR);
+                    return;
+                }
 
-        this.blockCache.add(targetPosition);
-        targetBlock.setType(fetchedStack.getType(), true);
-        if (SupportedPluginManager.getInstance().isMcMMO()) {
-            try {
-                mcMMO.getChunkManager().setTrue(targetBlock);
-            } catch (NoClassDefFoundError e) {
-                mcMMO.getPlaceStore().setTrue(targetBlock);
-            }
-        }
-        ParticleUtils.displayParticleRandomly(
-            LocationUtils.centre(targetBlock.getLocation()), Particle.ELECTRIC_SPARK, 1, 5);
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+                this.blockCache.add(targetPosition);
+                targetBlock.setType(fetchedStack.getType(), true);
+                if (SupportedPluginManager.getInstance().isMcMMO()) {
+                    try {
+                        mcMMO.getChunkManager().setTrue(targetBlock);
+                    } catch (NoClassDefFoundError e) {
+                        mcMMO.getPlaceStore().setTrue(targetBlock);
+                    }
+                }
+                ParticleUtils.displayParticleRandomly(
+                    LocationUtils.centre(targetBlock.getLocation()), Particle.ELECTRIC_SPARK, 1, 5);
+                sendFeedback(menuLocation, FeedbackType.WORKING);
+            }));
     }
 
     @Override
