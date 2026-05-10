@@ -5,6 +5,7 @@ import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.slimefun.network.NetworkObject;
 import io.github.sefiraat.networks.utils.Keys;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.thebusybiscuit.slimefun4.api.events.PlayerRightClickEvent;
 import io.github.thebusybiscuit.slimefun4.api.items.ItemGroup;
 import io.github.thebusybiscuit.slimefun4.api.items.ItemHandler;
@@ -30,6 +31,10 @@ public class NetworkRake extends LimitedUseItem {
     private static final String WIKI_PAGE = "Network-Rake";
 
     private static final NamespacedKey key = Keys.newKey("uses");
+
+    private static boolean canDirectlyAccess(@NotNull Block block) {
+        return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
+    }
 
     public NetworkRake(
         @NotNull ItemGroup itemGroup,
@@ -63,6 +68,10 @@ public class NetworkRake extends LimitedUseItem {
         if (optional.isPresent()) {
             final Block block = optional.get();
             final Player player = e.getPlayer();
+            if (!canDirectlyAccess(block)) {
+                player.sendMessage("§cFolia 下无法直接破坏另一个 region 中的网络方块");
+                return;
+            }
             final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
             if ((slimefunItem instanceof NetworkObject || slimefunItem instanceof ModellableItem)
                 && Slimefun.getProtectionManager().hasPermission(player, block, Interaction.BREAK_BLOCK)) {

@@ -7,7 +7,6 @@ import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import dev.sefiraat.sefilib.misc.ParticleUtils;
 import dev.sefiraat.sefilib.world.LocationUtils;
 import io.github.sefiraat.networks.NetworkStorage;
-import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
 import io.github.thebusybiscuit.slimefun4.api.items.ItemGroup;
@@ -19,7 +18,6 @@ import io.github.thebusybiscuit.slimefun4.libraries.paperlib.PaperLib;
 import io.github.thebusybiscuit.slimefun4.libraries.paperlib.features.blockstatesnapshot.BlockStateSnapshotResult;
 import io.github.thebusybiscuit.slimefun4.utils.tags.SlimefunTag;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenu;
-import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Material;
 import org.bukkit.Particle;
@@ -30,8 +28,8 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"DuplicatedCode", "GrazieInspection"})
 public class NetworkControlX extends NetworkDirectional implements SoftCellBannable {
@@ -50,7 +48,7 @@ public class NetworkControlX extends NetworkDirectional implements SoftCellBanna
     private static final int DOWN_SLOT = 32;
     private static final int REQUIRED_POWER = 100;
     private static final Particle.DustOptions DUST_OPTIONS = new Particle.DustOptions(Color.GRAY, 1);
-    private final Set<BlockPosition> blockCache = new HashSet<>();
+    private final Set<BlockPosition> blockCache = ConcurrentHashMap.newKeySet();
 
     public NetworkControlX(
         @NotNull ItemGroup itemGroup,
@@ -98,6 +96,10 @@ public class NetworkControlX extends NetworkDirectional implements SoftCellBanna
         }
 
         final Block targetBlock = blockMenu.getBlock().getRelative(direction);
+        if (!canDirectlyAccess(targetBlock.getLocation())) {
+            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
+            return;
+        }
         final BlockPosition targetPosition = new BlockPosition(targetBlock);
 
         if (this.blockCache.contains(targetPosition)) {
@@ -145,37 +147,35 @@ public class NetworkControlX extends NetworkDirectional implements SoftCellBanna
         final OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(uuid);
          */
 
-        Bukkit.getScheduler().runTask(Networks.getInstance(), bukkitTask -> {
-            /* Netex - #293
-            // No longer check permission
-            if (!Slimefun.getProtectionManager().hasPermission(offlinePlayer, targetBlock, Interaction.BREAK_BLOCK)) {
-                sendFeedback(blockMenu.getLocation(), FeedbackType.NO_PERMISSION);
+        /* Netex - #293
+        // No longer check permission
+        if (!Slimefun.getProtectionManager().hasPermission(offlinePlayer, targetBlock, Interaction.BREAK_BLOCK)) {
+            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_PERMISSION);
+            return;
+        }
+
+         */
+
+        final ItemStack resultStack = new ItemStack(material, 1);
+
+        definition.getNode().getRoot().addItemStack0(blockMenu.getLocation(), resultStack);
+
+        if (resultStack.getAmount() == 0) {
+            this.blockCache.add(targetPosition);
+
+            final BlockStateSnapshotResult blockState = PaperLib.getBlockState(targetBlock, true);
+
+            if (blockState.getState() instanceof InventoryHolder) {
+                sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_CUT);
                 return;
             }
 
-             */
-
-            final ItemStack resultStack = new ItemStack(material, 1);
-
-            definition.getNode().getRoot().addItemStack0(blockMenu.getLocation(), resultStack);
-
-            if (resultStack.getAmount() == 0) {
-                this.blockCache.add(targetPosition);
-
-                final BlockStateSnapshotResult blockState = PaperLib.getBlockState(targetBlock, true);
-
-                if (blockState.getState() instanceof InventoryHolder) {
-                    sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_CUT);
-                    return;
-                }
-
-                targetBlock.setType(Material.AIR, true);
-                ParticleUtils.displayParticleRandomly(
-                    LocationUtils.centre(targetBlock.getLocation()), 1, 5, DUST_OPTIONS);
-                definition.getNode().getRoot().removeRootPower(REQUIRED_POWER);
-                sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-            }
-        });
+            targetBlock.setType(Material.AIR, true);
+            ParticleUtils.displayParticleRandomly(
+                LocationUtils.centre(targetBlock.getLocation()), 1, 5, DUST_OPTIONS);
+            definition.getNode().getRoot().removeRootPower(REQUIRED_POWER);
+            sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+        }
     }
 
     @Override

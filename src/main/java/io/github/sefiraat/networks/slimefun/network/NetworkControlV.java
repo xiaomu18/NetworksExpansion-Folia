@@ -7,7 +7,6 @@ import com.gmail.nossr50.mcMMO;
 import dev.sefiraat.sefilib.misc.ParticleUtils;
 import dev.sefiraat.sefilib.world.LocationUtils;
 import io.github.sefiraat.networks.NetworkStorage;
-import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.managers.SupportedPluginManager;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
@@ -19,7 +18,6 @@ import io.github.thebusybiscuit.slimefun4.api.recipes.RecipeType;
 import io.github.thebusybiscuit.slimefun4.libraries.dough.blocks.BlockPosition;
 import io.github.thebusybiscuit.slimefun4.utils.tags.SlimefunTag;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenu;
-import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Material;
 import org.bukkit.Particle;
@@ -29,8 +27,8 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"DuplicatedCode", "GrazieInspection"})
 public class NetworkControlV extends NetworkDirectional implements SoftCellBannable {
@@ -48,7 +46,7 @@ public class NetworkControlV extends NetworkDirectional implements SoftCellBanna
     private static final int UP_SLOT = 14;
     private static final int DOWN_SLOT = 32;
     private static final int REQUIRED_POWER = 100;
-    private final Set<BlockPosition> blockCache = new HashSet<>();
+    private final Set<BlockPosition> blockCache = ConcurrentHashMap.newKeySet();
 
     public NetworkControlV(
         @NotNull ItemGroup itemGroup,
@@ -98,6 +96,10 @@ public class NetworkControlV extends NetworkDirectional implements SoftCellBanna
         }
 
         final Block targetBlock = blockMenu.getBlock().getRelative(direction);
+        if (!canDirectlyAccess(targetBlock.getLocation())) {
+            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
+            return;
+        }
         final BlockPosition targetPosition = new BlockPosition(targetBlock);
 
         if (this.blockCache.contains(targetPosition)) {
@@ -159,19 +161,17 @@ public class NetworkControlV extends NetworkDirectional implements SoftCellBanna
         }
 
         this.blockCache.add(targetPosition);
-        Bukkit.getScheduler().runTask(Networks.getInstance(), bukkitTask -> {
-            targetBlock.setType(fetchedStack.getType(), true);
-            if (SupportedPluginManager.getInstance().isMcMMO()) {
-                try {
-                    mcMMO.getChunkManager().setTrue(targetBlock);
-                } catch (NoClassDefFoundError e) {
-                    mcMMO.getPlaceStore().setTrue(targetBlock);
-                }
+        targetBlock.setType(fetchedStack.getType(), true);
+        if (SupportedPluginManager.getInstance().isMcMMO()) {
+            try {
+                mcMMO.getChunkManager().setTrue(targetBlock);
+            } catch (NoClassDefFoundError e) {
+                mcMMO.getPlaceStore().setTrue(targetBlock);
             }
-            ParticleUtils.displayParticleRandomly(
-                LocationUtils.centre(targetBlock.getLocation()), Particle.ELECTRIC_SPARK, 1, 5);
-            sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-        });
+        }
+        ParticleUtils.displayParticleRandomly(
+            LocationUtils.centre(targetBlock.getLocation()), Particle.ELECTRIC_SPARK, 1, 5);
+        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
     }
 
     @Override

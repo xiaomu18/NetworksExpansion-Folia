@@ -7,6 +7,7 @@ import com.google.gson.Gson;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import io.github.sefiraat.networks.utils.Keys;
 import io.github.sefiraat.networks.utils.StackUtils;
@@ -43,6 +44,10 @@ public class CargoNodeQuickTool extends SpecialSlimefunItem {
     private final int[] listSlots = {19, 20, 21, 28, 29, 30, 37, 38, 39};
     private final Gson gson = new Gson();
 
+    private static boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
+    }
+
     public CargoNodeQuickTool(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -70,6 +75,10 @@ public class CargoNodeQuickTool extends SpecialSlimefunItem {
                 return;
             }
             Location bLoc = target.getLocation();
+            if (!canDirectlyAccess(bLoc)) {
+                p.sendMessage("§cFolia 下无法直接配置另一个 region 中的货运节点");
+                return;
+            }
             // If not cargo node block, return.
             SlimefunBlockData blockData = StorageCacheUtils.getBlock(bLoc);
             if (blockData == null || !blockData.getSfId().startsWith("CARGO_NODE_")) {

@@ -3,6 +3,7 @@ package com.ytdd9527.networksexpansion.implementation.tools;
 import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -21,6 +22,10 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Optional;
 
 public class NetworksInfoTool extends SpecialSlimefunItem {
+    private static boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
+    }
+
     public NetworksInfoTool(@NotNull ItemGroup itemGroup, @NotNull SlimefunItemStack item) {
         super(itemGroup, item, RecipeType.NULL, new ItemStack[]{});
         addItemHandler((ItemUseHandler) e -> {
@@ -35,6 +40,10 @@ public class NetworksInfoTool extends SpecialSlimefunItem {
                 final Location location = optional.get().getLocation();
                 if (player.isSneaking()) {
                     location.add(0, 1, 0);
+                }
+                if (!canDirectlyAccess(location)) {
+                    player.sendMessage(TextUtil.RED + "Folia 下无法直接查看另一个 region 中的方块");
+                    return;
                 }
                 final SlimefunItem sfi = StorageCacheUtils.getSfItem(location);
                 if (sfi instanceof NetworkObject) {

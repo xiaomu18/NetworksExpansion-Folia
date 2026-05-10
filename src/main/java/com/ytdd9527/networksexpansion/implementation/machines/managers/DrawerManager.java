@@ -12,6 +12,7 @@ import com.github.houbb.pinyin.util.PinyinHelper;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.ParticleUtil;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import io.github.sefiraat.networks.NetworkStorage;
@@ -55,13 +56,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
 public class DrawerManager extends NetworkObject {
     public static final String MANAGER_TAG = "drawer_manager";
     public static final NetworkRootLocateStorageEvent.Strategy MANAGER_STRATEGY =
         NetworkRootLocateStorageEvent.Strategy.custom(MANAGER_TAG);
-    private static final Map<Location, GridCache> CACHE_MAP = new HashMap<>();
+    private static final Map<Location, GridCache> CACHE_MAP = new ConcurrentHashMap<>();
+    private static final Map<Location, Integer> TICK_MAP = new ConcurrentHashMap<>();
     private static final int[] BACKGROUND_SLOTS = new int[]{8, 17};
     private static final int[] DISPLAY_SLOTS = {
         0, 1, 2, 3, 4, 5, 6, 7,
@@ -103,31 +106,33 @@ public class DrawerManager extends NetworkObject {
         addItemSetting(this.tickRate);
 
         addItemHandler(new BlockTicker() {
-
-            private int tick = 1;
-
             @Override
             public boolean isSynchronized() {
-                return false;
+                return true;
             }
 
             @Override
             public void tick(@NotNull Block block, SlimefunItem item, @NotNull SlimefunBlockData data) {
-                if (tick <= 1) {
-                    final BlockMenu blockMenu = data.getBlockMenu();
-                    if (blockMenu == null) {
-                        return;
-                    }
-                    addToRegistry(block);
-                    updateDisplay(blockMenu);
+                Location location = block.getLocation();
+                int tick = TICK_MAP.getOrDefault(location, 1);
+                if (tick > 1) {
+                    TICK_MAP.put(location, tick - 1);
+                    return;
                 }
-            }
 
-            @Override
-            public void uniqueTick() {
-                tick = tick <= 1 ? tickRate.getValue() : tick - 1;
+                TICK_MAP.put(location, tickRate.getValue());
+                final BlockMenu blockMenu = data.getBlockMenu();
+                if (blockMenu == null) {
+                    return;
+                }
+                addToRegistry(block);
+                updateDisplay(blockMenu);
             }
         });
+    }
+
+    private static boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
     public static @Nullable String getStorageName(@NotNull Location dataLocation) {
@@ -189,12 +194,16 @@ public class DrawerManager extends NetworkObject {
     }
 
     public static void openMenu(@NotNull StorageUnitData data, @NotNull Player player) {
+        if (!canDirectlyAccess(data.getLastLocation())) {
+            player.sendMessage(FeedbackType.NO_TARGET_BLOCK.getMessage());
+            return;
+        }
         BlockMenu menu = StorageCacheUtils.getMenu(data.getLastLocation());
         if (menu == null) {
             return;
         }
 
-        menu.open(player);
+        FoliaSupport.runPlayer(player, () -> menu.open(player));
     }
 
     @SuppressWarnings("deprecation")
@@ -287,21 +296,23 @@ public class DrawerManager extends NetworkObject {
         player.sendMessage(Lang.getString("messages.normal-operation.manager.set_name"));
         player.closeInventory();
         ChatUtils.awaitInput(player, s -> {
-            StorageCacheUtils.setData(dataLocation, BS_NAME, s);
-            player.sendMessage(Lang.getString("messages.completed-operation.manager.set_name"));
+            FoliaSupport.runPlayer(player, () -> {
+                StorageCacheUtils.setData(dataLocation, BS_NAME, s);
+                player.sendMessage(Lang.getString("messages.completed-operation.manager.set_name"));
 
-            SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
-            if (data == null) {
-                return;
-            }
-
-            if (blockMenu.getPreset().getID().equals(data.getSfId())) {
-                BlockMenu actualMenu = data.getBlockMenu();
-                if (actualMenu != null) {
-                    updateDisplay(actualMenu);
-                    actualMenu.open(player);
+                SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
+                if (data == null) {
+                    return;
                 }
-            }
+
+                if (blockMenu.getPreset().getID().equals(data.getSfId())) {
+                    BlockMenu actualMenu = data.getBlockMenu();
+                    if (actualMenu != null) {
+                        updateDisplay(actualMenu);
+                        actualMenu.open(player);
+                    }
+                }
+            });
         });
     }
 
@@ -382,13 +393,15 @@ public class DrawerManager extends NetworkObject {
                 } else if (!isEmpty) {
                     displayStack = new CustomItemStack(
                         displayStack, TextUtil.GRAY + ItemStackHelper.getDisplayName(dataItemStack));
-                } else {
+                } else if (canDirectlyAccess(dataLocation)) {
                     SlimefunItem sf = StorageCacheUtils.getSfItem(dataLocation);
                     if (sf == null) {
                         displayStack = new CustomItemStack(displayStack, Sorters.NO_ITEM);
                     } else {
                         displayStack = sf.getItem().clone();
                     }
+                } else {
+                    displayStack = new CustomItemStack(Icon.UNKNOWN_ITEM, Sorters.NO_ITEM);
                 }
 
                 final ItemMeta itemMeta = displayStack.getItemMeta();
@@ -566,23 +579,25 @@ public class DrawerManager extends NetworkObject {
                 if (s.isBlank()) {
                     return;
                 }
-                s = s.toLowerCase(Locale.ROOT);
-                gridCache.setFilter(s);
-                getCacheMap().put(blockMenu.getLocation(), gridCache);
-                player.sendMessage(Lang.getString("messages.completed-operation.grid.filter_set"));
+                final String normalized = s.toLowerCase(Locale.ROOT);
+                FoliaSupport.runPlayer(player, () -> {
+                    gridCache.setFilter(normalized);
+                    getCacheMap().put(blockMenu.getLocation(), gridCache);
+                    player.sendMessage(Lang.getString("messages.completed-operation.grid.filter_set"));
 
-                SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
-                if (data == null) {
-                    return;
-                }
-
-                if (blockMenu.getPreset().getID().equals(data.getSfId())) {
-                    BlockMenu actualMenu = data.getBlockMenu();
-                    if (actualMenu != null) {
-                        updateDisplay(actualMenu);
-                        actualMenu.open(player);
+                    SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
+                    if (data == null) {
+                        return;
                     }
-                }
+
+                    if (blockMenu.getPreset().getID().equals(data.getSfId())) {
+                        BlockMenu actualMenu = data.getBlockMenu();
+                        if (actualMenu != null) {
+                            updateDisplay(actualMenu);
+                            actualMenu.open(player);
+                        }
+                    }
+                });
             });
         }
     }

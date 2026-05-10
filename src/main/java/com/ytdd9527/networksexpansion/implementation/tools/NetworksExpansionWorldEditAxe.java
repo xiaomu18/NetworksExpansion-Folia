@@ -8,13 +8,9 @@ import io.github.thebusybiscuit.slimefun4.api.items.SlimefunItemStack;
 import io.github.thebusybiscuit.slimefun4.api.recipes.RecipeType;
 import io.github.thebusybiscuit.slimefun4.core.handlers.ItemUseHandler;
 import io.github.thebusybiscuit.slimefun4.core.handlers.ToolUseHandler;
-import org.bukkit.Location;
-import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
-
-import java.util.Optional;
 
 @Deprecated
 public class NetworksExpansionWorldEditAxe extends SpecialSlimefunItem {
@@ -29,11 +25,7 @@ public class NetworksExpansionWorldEditAxe extends SpecialSlimefunItem {
                         Lang.getString("messages.unsupported-operation.comprehensive.no_permission"));
                     return;
                 }
-                final Optional<Block> optional = e.getClickedBlock();
-                if (optional.isPresent()) {
-                    final Location location = optional.get().getLocation();
-                    NetworksMain.worldeditPos2(player, location);
-                }
+                NetworksMain.sendWorldEditDisabledMessage(player);
                 e.cancel();
             },
             (ToolUseHandler) (e, t, f, d) -> {
@@ -42,10 +34,7 @@ public class NetworksExpansionWorldEditAxe extends SpecialSlimefunItem {
                     player.sendMessage(Lang.getString("messages.unsupported-operation.no_permission"));
                     return;
                 }
-
-                final Location location = e.getBlock().getLocation();
-                NetworksMain.worldeditPos1(player, location);
-
+                NetworksMain.sendWorldEditDisabledMessage(player);
                 e.setCancelled(true);
             });
     }

@@ -27,6 +27,7 @@ import org.jspecify.annotations.NullMarked;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @NullMarked
 @SuppressWarnings("DuplicatedCode")
@@ -50,7 +51,7 @@ public class NetworkGridNewStyle extends AbstractGridNewStyle implements Keybind
     private static final int PAGE_NEXT = 53;
     private static final int TOGGLE_MODE_SLOT = 17;
 
-    private static final Map<Location, GridCache> CACHE_MAP = new HashMap<>();
+    private static final Map<Location, GridCache> CACHE_MAP = new ConcurrentHashMap<>();
 
     public NetworkGridNewStyle(
         @NotNull ItemGroup itemGroup,

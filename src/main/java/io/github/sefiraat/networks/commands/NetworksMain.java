@@ -11,6 +11,7 @@ import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.unusable.AbstractBlueprint;
 import com.ytdd9527.networksexpansion.implementation.machines.unit.NetworksDrawer;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.ParticleUtil;
 import com.ytdd9527.networksexpansion.utils.WorldUtils;
 import io.github.bakedlibs.dough.collections.Pair;
@@ -72,6 +73,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -79,6 +81,11 @@ import java.util.stream.Collectors;
 
 @SuppressWarnings({"deprecation", "DuplicatedCode"})
 public class NetworksMain implements TabExecutor {
+    private static final String FOLIA_WORLDEDIT_DISABLED_MESSAGE =
+        ChatColor.RED + "Folia builds currently disable /networks worldedit* features.";
+    private static final String FOLIA_CROSS_REGION_BLOCK_MESSAGE =
+        ChatColor.RED + "Folia builds cannot directly inspect or modify a target block in another region.";
+
     @Deprecated
     private static final Set<UUID> requesters = new ConcurrentSkipListSet<>();
 
@@ -86,25 +93,26 @@ public class NetworksMain implements TabExecutor {
     private static final Networks javaPlugin = Networks.getInstance();
 
     @Deprecated
-    private static final Map<UUID, Pair<Location, Location>> SELECTED_POS = new HashMap<>();
+    private static final Map<UUID, Pair<Location, Location>> SELECTED_POS = new ConcurrentHashMap<>();
 
     public NetworksMain() {
-        javaPlugin
-            .getServer()
-            .getScheduler()
-            .runTaskTimerAsynchronously(
-                javaPlugin,
-                () -> {
-                    for (UUID uuid : requesters) {
-                        Player player = Bukkit.getPlayer(uuid);
-                        if (player == null) {
-                            continue;
-                        }
-                        handleSelectedAreaOutlineShowRequest(player);
-                    }
-                },
-                0,
-                Slimefun.getTickerTask().getTickRate());
+    }
+
+    public static void sendWorldEditDisabledMessage(@NotNull Player player) {
+        player.sendMessage(FOLIA_WORLDEDIT_DISABLED_MESSAGE);
+    }
+
+    private static boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
+    }
+
+    private static boolean ensureDirectBlockAccess(@NotNull Player player, @NotNull Location location) {
+        if (canDirectlyAccess(location)) {
+            return true;
+        }
+
+        player.sendMessage(FOLIA_CROSS_REGION_BLOCK_MESSAGE);
+        return false;
     }
 
     @Deprecated
@@ -142,30 +150,11 @@ public class NetworksMain implements TabExecutor {
 
     @Deprecated
     public static void toggleShowSelectedAreaOutline(@NotNull Player p) {
-        if (requesters.contains(p.getUniqueId())) {
-            requesters.remove(p.getUniqueId());
-            p.sendMessage(Lang.getString("messages.commands.selected-area-outline-hide-request"));
-        } else {
-            requesters.add(p.getUniqueId());
-            p.sendMessage(Lang.getString("messages.commands.selected-area-outline-show-request"));
-        }
+        sendWorldEditDisabledMessage(p);
     }
 
     @Deprecated
     private static void handleSelectedAreaOutlineShowRequest(@NotNull Player p) {
-        Location pos1 = getPos1(p);
-        Location pos2 = getPos2(p);
-        if (pos1 == null || pos2 == null) {
-            return;
-        }
-
-        javaPlugin
-            .getServer()
-            .getScheduler()
-            .runTaskLaterAsynchronously(
-                javaPlugin,
-                () -> ParticleUtil.drawRegionOutline(javaPlugin, Particle.WAX_OFF, 0, pos1, pos2),
-                Slimefun.getTickerTask().getTickRate());
     }
 
     @Deprecated
@@ -221,6 +210,9 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-admin-debuggable"));
             return;
         }
+        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
+            return;
+        }
 
         final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
         if (slimefunItem == null) {
@@ -246,6 +238,9 @@ public class NetworksMain implements TabExecutor {
         final Block targetBlock = player.getTargetBlockExact(8, FluidCollisionMode.NEVER);
         if (targetBlock == null || targetBlock.getType() == Material.AIR) {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-quantum-storage"));
+            return;
+        }
+        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
             return;
         }
 
@@ -297,6 +292,9 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
             return;
         }
+        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
+            return;
+        }
 
         final ItemStack itemInHand = player.getInventory().getItemInMainHand();
         if (itemInHand.getType() == Material.AIR) {
@@ -339,6 +337,9 @@ public class NetworksMain implements TabExecutor {
         final Block targetBlock = player.getTargetBlockExact(8, FluidCollisionMode.NEVER);
         if (targetBlock == null || targetBlock.getType() == Material.AIR) {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
+            return;
+        }
+        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
             return;
         }
 
@@ -385,6 +386,9 @@ public class NetworksMain implements TabExecutor {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
             return;
         }
+        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
+            return;
+        }
 
         final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
         if (slimefunItem == null) {
@@ -407,50 +411,22 @@ public class NetworksMain implements TabExecutor {
 
     @Deprecated
     public static void worldeditPos1(@NotNull Player player) {
-        Block targetBlock = player.getTargetBlockExact(8, FluidCollisionMode.NEVER);
-        if (targetBlock == null) {
-            targetBlock = player.getLocation().getBlock();
-        }
-
-        worldeditPos1(player, targetBlock.getLocation());
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
     public static void worldeditPos1(@NotNull Player player, Location location) {
-        setPos1(player, location);
-        if (getPos2(player) == null) {
-            player.sendMessage(String.format(
-                Lang.getString("messages.commands.worldedit.set-pos1"), locationToString(getPos1(player))));
-        } else {
-            player.sendMessage(String.format(
-                Lang.getString("messages.commands.worldedit.set-pos1-with-blocks"),
-                locationToString(getPos1(player)),
-                locationRange(getPos1(player), getPos2(player))));
-        }
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
     public static void worldeditPos2(@NotNull Player player) {
-        Block targetBlock = player.getTargetBlockExact(8, FluidCollisionMode.NEVER);
-        if (targetBlock == null) {
-            targetBlock = player.getLocation().getBlock();
-        }
-
-        worldeditPos2(player, targetBlock.getLocation());
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
     public static void worldeditPos2(@NotNull Player player, Location location) {
-        setPos2(player, location);
-        if (getPos1(player) == null) {
-            player.sendMessage(String.format(
-                Lang.getString("messages.commands.worldedit.set-pos2"), locationToString(getPos2(player))));
-        } else {
-            player.sendMessage(String.format(
-                Lang.getString("messages.commands.worldedit.set-pos2-with-blocks"),
-                locationToString(getPos1(player)),
-                locationRange(getPos1(player), getPos2(player))));
-        }
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
@@ -461,135 +437,7 @@ public class NetworksMain implements TabExecutor {
     @Deprecated
     @SuppressWarnings("UnstableApiUsage")
     public static void worldeditClone(@NotNull Player player, boolean overrideData) {
-        Location pos1 = getPos1(player);
-        Location pos2 = getPos2(player);
-        if (pos1 == null || pos2 == null) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-range"));
-            return;
-        }
-
-        World w1 = pos1.getWorld();
-        World w2 = pos2.getWorld();
-        if (w1 == null || w2 == null) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-range"));
-            return;
-        }
-
-        if (!Objects.equals(w1.getUID(), w2.getUID())) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-same-world"));
-            return;
-        }
-
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.pasting-block"),
-            locationToString(getPos1(player)),
-            locationToString(getPos2(player))));
-        final long currentMillSeconds = System.currentTimeMillis();
-
-        final AtomicInteger count = new AtomicInteger();
-        final Location playerLocation = player.getLocation();
-        final ItemStack itemInHand = player.getItemInHand();
-
-        final int dx = playerLocation.getBlockX() - pos1.getBlockX();
-        final int dy = playerLocation.getBlockY() - pos1.getBlockY();
-        final int dz = playerLocation.getBlockZ() - pos1.getBlockZ();
-
-        final Map<ChunkPosition, Set<Location>> tickingBlocks =
-            Slimefun.getTickerTask().getLocations();
-
-        Bukkit.getScheduler().runTask(Networks.getInstance(), () -> {
-            doWorldEdit(getPos1(player), getPos2(player), (fromLocation -> {
-                final Block fromBlock = fromLocation.getBlock();
-                final Block toBlock = playerLocation
-                    .getWorld()
-                    .getBlockAt(
-                        fromLocation.getBlockX() + dx,
-                        fromLocation.getBlockY() + dy,
-                        fromLocation.getBlockZ() + dz);
-                final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(fromLocation);
-                final Location toLocation = toBlock.getLocation();
-
-                // Block Data
-                WorldUtils.copyBlockState(PaperLib.getBlockState(fromBlock, false).getState(), toBlock);
-
-                // Count means successful pasting block data. Not including Slimefun data.
-                count.addAndGet(1);
-
-                // Slimefun Data
-                if (slimefunItem == null) {
-                    return;
-                }
-
-                // Call Handler
-                slimefunItem.callItemHandler(
-                    BlockPlaceHandler.class,
-                    handler -> handler.onPlayerPlace(new BlockPlaceEvent(
-                        toBlock,
-                        PaperLib.getBlockState(toBlock, false).getState(),
-                        toBlock.getRelative(BlockFace.SOUTH),
-                        itemInHand,
-                        player,
-                        true,
-                        EquipmentSlot.HAND)));
-
-                SlimefunBlockData fromSlimefunBlockData =
-                    Slimefun.getDatabaseManager().getBlockDataController().getBlockData(fromLocation);
-                if (overrideData) {
-                    Slimefun.getDatabaseManager().getBlockDataController().removeBlock(toLocation);
-                }
-
-                boolean ticking = false;
-                ChunkPosition chunkPosition = new ChunkPosition(fromLocation);
-                if (tickingBlocks.containsKey(chunkPosition)) {
-                    if (tickingBlocks.get(chunkPosition).contains(fromLocation)) {
-                        ticking = true;
-                    }
-                }
-
-                if (StorageCacheUtils.hasBlock(toLocation)) {
-                    return;
-                }
-
-                // Slimefun Block
-                Slimefun.getDatabaseManager().getBlockDataController().createBlock(toLocation, slimefunItem.getId());
-                SlimefunBlockData toSlimefunBlockData =
-                    Slimefun.getDatabaseManager().getBlockDataController().getBlockData(toLocation);
-
-                // SlimefunBlockData
-                if (fromSlimefunBlockData == null || toSlimefunBlockData == null) {
-                    return;
-                }
-
-                Map<String, String> data = fromSlimefunBlockData.getAllData();
-                for (String key : data.keySet()) {
-                    toSlimefunBlockData.setData(key, data.get(key));
-                }
-
-                // BlockMenu
-                final BlockMenu fromMenu = fromSlimefunBlockData.getBlockMenu();
-                final BlockMenu toMenu = toSlimefunBlockData.getBlockMenu();
-
-                if (fromMenu == null || toMenu == null) {
-                    return;
-                }
-
-                ItemStack[] contents = fromMenu.getContents();
-                for (int i = 0; i < contents.length; i++) {
-                    if (contents[i] != null) {
-                        toMenu.getInventory().setItem(i, contents[i].clone());
-                    }
-                }
-
-                // Ticking
-                if (!ticking) {
-                    Slimefun.getTickerTask().disableTicker(toLocation);
-                }
-            }));
-            player.sendMessage(String.format(
-                Lang.getString("messages.commands.worldedit.paste-done"),
-                count,
-                System.currentTimeMillis() - currentMillSeconds));
-        });
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
@@ -606,246 +454,27 @@ public class NetworksMain implements TabExecutor {
     @SuppressWarnings("UnstableApiUsage")
     public static void worldeditPaste(
         @NotNull Player player, @NotNull String sfid, boolean overrideData, boolean force) {
-        final SlimefunItem sfItem = SlimefunItem.getById(sfid);
-
-        Location pos1 = getPos1(player);
-        Location pos2 = getPos2(player);
-        if (pos1 == null || pos2 == null) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-range"));
-            return;
-        }
-
-        if (!Objects.equals(pos1.getWorld().getUID(), pos2.getWorld().getUID())) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-same-world"));
-            return;
-        }
-
-        if (sfItem == null) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.invalid-slimefun-block-id"));
-            return;
-        }
-
-        if (!sfItem.getItem().getType().isBlock()) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.invalid-slimefun-block-id"));
-            return;
-        }
-
-        if (sfItem.getItem().getType() == Material.AIR) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.not-a-placeable-block"));
-            return;
-        }
-
-        if (!force && sfItem instanceof NotPlaceable) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.not-placeable-block"));
-            return;
-        }
-
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.pasting-block"),
-            locationToString(getPos1(player)),
-            locationToString(getPos2(player))));
-        final long currentMillSeconds = System.currentTimeMillis();
-
-        final AtomicInteger count = new AtomicInteger();
-        final Material t = sfItem.getItem().getType();
-        final ItemStack itemStack = sfItem.getItem();
-        PlayerSkin skin0 = null;
-        boolean isHead0 = false;
-        final PlayerSkin skin;
-        final boolean isHead;
-        if (itemStack.getType() == Material.PLAYER_HEAD || itemStack.getType() == Material.PLAYER_WALL_HEAD) {
-            if (itemStack instanceof SlimefunItemStack sfis) {
-                Optional<String> texture = sfis.getSkullTexture();
-                if (texture.isPresent()) {
-                    skin0 = PlayerSkin.fromBase64(texture.get());
-                    isHead0 = true;
-                }
-            }
-        }
-        skin = skin0;
-        isHead = isHead0;
-
-        doWorldEdit(getPos1(player), getPos2(player), (location -> {
-            final Block targetBlock = location.getBlock();
-            sfItem.callItemHandler(
-                BlockPlaceHandler.class,
-                h -> h.onPlayerPlace(new BlockPlaceEvent(
-                    targetBlock,
-                    PaperLib.getBlockState(targetBlock, false).getState(),
-                    targetBlock.getRelative(BlockFace.DOWN),
-                    itemStack,
-                    player,
-                    true,
-                    EquipmentSlot.HAND)));
-            if (overrideData) {
-                Slimefun.getDatabaseManager().getBlockDataController().removeBlock(location);
-            }
-            if (!StorageCacheUtils.hasBlock(location)) {
-                targetBlock.setType(t);
-                if (isHead) {
-                    PlayerHead.setSkin(targetBlock, skin, false);
-                }
-                Slimefun.getDatabaseManager().getBlockDataController().createBlock(location, sfid);
-            }
-            count.addAndGet(1);
-        }));
-
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.paste-done"),
-            count,
-            System.currentTimeMillis() - currentMillSeconds));
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
     public static void worldeditClear(@NotNull Player player, boolean callHandler, boolean skipVanilla) {
-        Location pos1 = getPos1(player);
-        Location pos2 = getPos2(player);
-        if (pos1 == null || pos2 == null) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-range"));
-            return;
-        }
-
-        if (!Objects.equals(pos1.getWorld().getUID(), pos2.getWorld().getUID())) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-same-world"));
-            return;
-        }
-
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.clearing-area"),
-            locationToString(getPos1(player)),
-            locationToString(getPos2(player))));
-        final long currentMillSeconds = System.currentTimeMillis();
-
-        final AtomicInteger count = new AtomicInteger();
-        doWorldEdit(getPos1(player), getPos2(player), (location -> {
-            final Block targetBlock = pos1.getWorld().getBlockAt(location);
-            if (StorageCacheUtils.hasBlock(location)) {
-                SlimefunItem item = StorageCacheUtils.getSfItem(location);
-                if (item != null && callHandler) {
-                    item.callItemHandler(
-                        BlockBreakHandler.class,
-                        handler -> handler.onPlayerBreak(
-                            new BlockBreakEvent(targetBlock, player),
-                            new ItemStack(Material.AIR),
-                            new ArrayList<>()));
-                }
-                targetBlock.setType(Material.AIR);
-            }
-            Slimefun.getDatabaseManager().getBlockDataController().removeBlock(location);
-            if (!skipVanilla) {
-                targetBlock.setType(Material.AIR);
-            }
-            count.addAndGet(1);
-        }));
-
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.clear-done"),
-            count,
-            System.currentTimeMillis() - currentMillSeconds));
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
     public static void worldeditBlockMenuSetSlot(@NotNull Player player, int slot) {
-        Location pos1 = getPos1(player);
-        Location pos2 = getPos2(player);
-        if (pos1 == null || pos2 == null) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-range"));
-            return;
-        }
-
-        if (!Objects.equals(pos1.getWorld().getUID(), pos2.getWorld().getUID())) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-same-world"));
-            return;
-        }
-
-        if (!(0 <= slot && slot <= 53)) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.invalid-slot"));
-            return;
-        }
-
-        final ItemStack hand = player.getInventory().getItemInMainHand();
-
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.set-slot"), slot, ItemStackHelper.getDisplayName(hand)));
-        final long currentMillSeconds = System.currentTimeMillis();
-
-        final AtomicInteger count = new AtomicInteger();
-        doWorldEdit(getPos1(player), getPos2(player), (location -> {
-            final BlockMenu menu = StorageCacheUtils.getMenu(location);
-            if (menu != null) {
-                menu.replaceExistingItem(slot, hand);
-            }
-            count.addAndGet(1);
-        }));
-
-        final String itemName = ItemStackHelper.getDisplayName(hand);
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.set-slot-done"),
-            slot,
-            itemName,
-            System.currentTimeMillis() - currentMillSeconds));
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
     public static void worldeditBlockInfoAdd(@NotNull Player player, @NotNull String key, @NotNull String value) {
-        Location pos1 = getPos1(player);
-        Location pos2 = getPos2(player);
-        if (pos1 == null || pos2 == null) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-range"));
-            return;
-        }
-
-        if (!Objects.equals(pos1.getWorld().getUID(), pos2.getWorld().getUID())) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-same-world"));
-            return;
-        }
-
-        player.sendMessage(String.format(Lang.getString("messages.commands.worldedit.setting-info"), key, value));
-        final long currentMillSeconds = System.currentTimeMillis();
-
-        final AtomicInteger count = new AtomicInteger();
-        doWorldEdit(getPos1(player), getPos2(player), (location -> {
-            if (StorageCacheUtils.getBlock(location) != null) {
-                StorageCacheUtils.setData(location, key, value);
-                count.addAndGet(1);
-            }
-        }));
-
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.set-info-done"),
-            key,
-            value,
-            System.currentTimeMillis() - currentMillSeconds));
+        sendWorldEditDisabledMessage(player);
     }
 
     @Deprecated
     public static void worldeditBlockInfoRemove(@NotNull Player player, @NotNull String key) {
-        Location pos1 = getPos1(player);
-        Location pos2 = getPos2(player);
-        if (pos1 == null || pos2 == null) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-range"));
-            return;
-        }
-
-        if (!Objects.equals(pos1.getWorld().getUID(), pos2.getWorld().getUID())) {
-            player.sendMessage(Lang.getString("messages.commands.worldedit.must-select-same-world"));
-            return;
-        }
-
-        player.sendMessage(String.format(Lang.getString("messages.commands.worldedit.removing-info"), key));
-        final long currentMillSeconds = System.currentTimeMillis();
-
-        final AtomicInteger count = new AtomicInteger();
-        doWorldEdit(getPos1(player), getPos2(player), (location -> {
-            if (StorageCacheUtils.getBlock(location) != null) {
-                StorageCacheUtils.removeData(location, key);
-                count.addAndGet(1);
-            }
-        }));
-        player.sendMessage(String.format(
-            Lang.getString("messages.commands.worldedit.removing-info"),
-            key,
-            System.currentTimeMillis() - currentMillSeconds));
+        sendWorldEditDisabledMessage(player);
     }
 
     private static void updateItem(@NotNull Player player) {
@@ -911,6 +540,9 @@ public class NetworksMain implements TabExecutor {
         final Block targetBlock = player.getTargetBlockExact(8, FluidCollisionMode.NEVER);
         if (targetBlock == null || targetBlock.getType() == Material.AIR) {
             player.sendMessage(Lang.getString("messages.commands.must-look-at-drawer"));
+            return;
+        }
+        if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
             return;
         }
 
@@ -1213,156 +845,8 @@ public class NetworksMain implements TabExecutor {
                 }
 
                 case "worldedit" -> {
-                    if (!player.hasPermission("networks.admin")
-                        && !player.hasPermission("networks.commands.worldedit.*")) {
-                        player.sendMessage(getErrorMessage(ErrorType.NO_PERMISSION));
-                        return true;
-                    }
-
-                    if (args.length == 1) {
-                        player.sendMessage(getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "subCommand"));
-                        return true;
-                    }
-
-                    switch (args[1].toLowerCase(Locale.ROOT)) {
-                        case "pos1" -> worldeditPos1(player);
-                        case "pos2" -> worldeditPos2(player);
-
-                        case "clear" -> {
-                            switch (args.length) {
-                                case 4 -> {
-                                    try {
-                                        boolean callHandler = Boolean.parseBoolean(args[2]);
-                                        boolean skipVanilla = Boolean.parseBoolean(args[3]);
-                                        worldeditClear(player, callHandler, skipVanilla);
-                                    } catch (NumberFormatException e) {
-                                        player.sendMessage(getErrorMessage(
-                                            ErrorType.INVALID_REQUIRED_ARGUMENT, "callHandler / skipVanilla"));
-                                    }
-                                }
-                                case 3 -> {
-                                    try {
-                                        boolean callHandler = Boolean.parseBoolean(args[2]);
-                                        worldeditClear(player, callHandler, true);
-                                    } catch (NumberFormatException e) {
-                                        player.sendMessage(
-                                            getErrorMessage(ErrorType.INVALID_REQUIRED_ARGUMENT, "callHandler"));
-                                    }
-                                }
-                                default -> worldeditClear(player, true, true);
-                            }
-                        }
-
-                        case "clone" -> {
-                            if (args.length == 2) {
-                                worldeditClone(player);
-                            } else if (args.length == 3) {
-                                worldeditClone(player, "override".equalsIgnoreCase(args[2]));
-                            }
-                        }
-
-                        case "paste" -> {
-                            if (args.length == 2) {
-                                player.sendMessage(getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "sfId"));
-                                return true;
-                            }
-                            boolean overrideData = false;
-                            boolean force = false;
-                            switch (args.length) {
-                                case 5 -> {
-                                    if ("override".equalsIgnoreCase(args[3])) {
-                                        overrideData = true;
-                                    }
-                                    force = Boolean.parseBoolean(args[4]);
-                                }
-                                case 4 -> {
-                                    if ("override".equalsIgnoreCase(args[3])) {
-                                        overrideData = true;
-                                    }
-                                }
-                            }
-                            worldeditPaste(player, args[2], overrideData, force);
-                        }
-
-                        case "blockmenu" -> {
-                            if (args.length == 2) {
-                                player.sendMessage(getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "subCommand"));
-                                return true;
-                            }
-
-                            if (args[2].toLowerCase(Locale.ROOT).equals("setslot")) {
-                                if (args.length == 3) {
-                                    player.sendMessage(getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "slot"));
-                                    return true;
-                                }
-
-                                try {
-                                    int slot = Calculator.calculate(args[3]).intValue();
-                                    worldeditBlockMenuSetSlot(player, slot);
-                                } catch (NumberFormatException e) {
-                                    player.sendMessage(getErrorMessage(ErrorType.INVALID_REQUIRED_ARGUMENT, "slot"));
-                                    player.sendMessage(e.getMessage());
-                                }
-                            } else {
-                                player.sendMessage(getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "subCommand"));
-                            }
-                        }
-
-                        case "blockinfo" -> {
-                            if (args.length == 2) {
-                                player.sendMessage(getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "subCommand"));
-                                return true;
-                            }
-
-                            switch (args[2].toLowerCase(Locale.ROOT)) {
-                                case "add", "set" -> {
-                                    switch (args.length) {
-                                        case 3 -> player.sendMessage(
-                                            getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "key"));
-                                        case 4 -> player.sendMessage(
-                                            getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "value"));
-                                        case 5 -> {
-                                            String key = args[3];
-                                            String value = args[4];
-                                            worldeditBlockInfoAdd(player, key, value);
-                                        }
-                                    }
-                                }
-                                case "remove" -> {
-                                    if (args.length == 3) {
-                                        player.sendMessage(
-                                            getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "value"));
-                                        return true;
-                                    }
-
-                                    String value = args[3];
-                                    worldeditBlockInfoRemove(player, value);
-                                }
-
-                                default -> player.sendMessage(
-                                    getErrorMessage(ErrorType.MISSING_REQUIRED_ARGUMENT, "subCommand"));
-                            }
-                        }
-                        case "clearpos" -> {
-                            if (!player.hasPermission("networks.admin")
-                                && !player.hasPermission("networks.commands.worldedit.clearpos")) {
-                                player.sendMessage(getErrorMessage(ErrorType.NO_PERMISSION));
-                                return true;
-                            }
-
-                            clearPos(player);
-                        }
-
-                        case "showareaoutline" -> {
-                            if (!player.hasPermission("networks.admin")
-                                && !player.hasPermission("networks.commands.worldedit.showAreaOutline")) {
-                                player.sendMessage(getErrorMessage(ErrorType.NO_PERMISSION));
-                                return true;
-                            }
-
-                            toggleShowSelectedAreaOutline(player);
-                        }
-                    }
+                    sendWorldEditDisabledMessage(player);
+                    return true;
                 }
 
                 case "updateitem" -> {
@@ -1453,6 +937,9 @@ public class NetworksMain implements TabExecutor {
                         player.sendMessage(Lang.getString("messages.commands.must-admin-debuggable"));
                         return true;
                     }
+                    if (!ensureDirectBlockAccess(player, targetBlock.getLocation())) {
+                        return true;
+                    }
 
                     final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
                     if (slimefunItem == null) {
@@ -1495,7 +982,7 @@ public class NetworksMain implements TabExecutor {
                         player.sendMessage("缓存: " + cchName);
                         @SuppressWarnings("unchecked") Map<Location, Integer> locations = (Map<Location, Integer>) value;
                         Map<String, Integer> formatted = locations.entrySet().stream().map(e -> {
-                            SlimefunItem sf = StorageCacheUtils.getSfItem(e.getKey());
+                            SlimefunItem sf = canDirectlyAccess(e.getKey()) ? StorageCacheUtils.getSfItem(e.getKey()) : null;
                             if (sf == null) {
                                 return Map.entry(e.getKey().toString(), e.getValue());
                             }
@@ -1598,6 +1085,10 @@ public class NetworksMain implements TabExecutor {
     }
 
     public @NotNull List<String> onTabCompleteRaw(@NotNull CommandSender sender, @NotNull String @NotNull [] args) {
+        if (args.length > 0 && args[0].equalsIgnoreCase("worldedit")) {
+            return List.of();
+        }
+
         switch (args.length) {
             case 1 -> {
                 return List.of(
@@ -1610,8 +1101,7 @@ public class NetworksMain implements TabExecutor {
                     "setContainerId",
                     "setQuantum",
                     "updateItem",
-                    "viewLog",
-                    "worldedit");
+                    "viewLog");
             }
             case 2 -> {
                 return switch (args[0].toLowerCase(Locale.ROOT)) {

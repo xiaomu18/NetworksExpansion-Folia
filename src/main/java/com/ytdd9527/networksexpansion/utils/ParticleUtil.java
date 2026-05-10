@@ -96,18 +96,14 @@ public class ParticleUtil {
                 lastTick = (int) (t / 50);
                 if (tick != lastTick) {
                     final List<Runnable> finalRunnableList = runnableList;
-                    plugin.getServer()
-                        .getScheduler()
-                        .runTaskLaterAsynchronously(plugin, () -> finalRunnableList.forEach(Runnable::run), tick);
+                    FoliaSupport.runRegionDelayed(location1, tick, () -> finalRunnableList.forEach(Runnable::run));
                     tick = lastTick;
                     runnableList = new ArrayList<>();
                 }
             }
             if (!runnableList.isEmpty()) {
                 final List<Runnable> finalRunnableList = runnableList;
-                plugin.getServer()
-                    .getScheduler()
-                    .runTaskLaterAsynchronously(plugin, () -> finalRunnableList.forEach(Runnable::run), tick);
+                FoliaSupport.runRegionDelayed(location1, tick, () -> finalRunnableList.forEach(Runnable::run));
             }
 
             time += (int) interval;
@@ -152,25 +148,23 @@ public class ParticleUtil {
                         0);
                 }
             } else {
-                plugin.getServer()
-                    .getScheduler()
-                    .runTaskLaterAsynchronously(
-                        plugin,
-                        () -> {
-                            for (int i = 0; i < BLOCK_CUBE_OFFSET_X.length; i++) {
-                                world.spawnParticle(
-                                    particle,
-                                    x + BLOCK_CUBE_OFFSET_X[i],
-                                    y + BLOCK_CUBE_OFFSET_Y[i],
-                                    z + BLOCK_CUBE_OFFSET_Z[i],
-                                    1,
-                                    0,
-                                    0,
-                                    0,
-                                    0);
-                            }
-                        },
-                        time / 50);
+                FoliaSupport.runRegionDelayed(
+                    location,
+                    time / 50,
+                    () -> {
+                        for (int i = 0; i < BLOCK_CUBE_OFFSET_X.length; i++) {
+                            world.spawnParticle(
+                                particle,
+                                x + BLOCK_CUBE_OFFSET_X[i],
+                                y + BLOCK_CUBE_OFFSET_Y[i],
+                                z + BLOCK_CUBE_OFFSET_Z[i],
+                                1,
+                                0,
+                                0,
+                                0,
+                                0);
+                        }
+                    });
             }
             time += (int) interval;
         }
@@ -262,25 +256,23 @@ public class ParticleUtil {
                         0);
                 }
             } else {
-                plugin.getServer()
-                    .getScheduler()
-                    .runTaskLaterAsynchronously(
-                        plugin,
-                        () -> {
-                            for (int i = 0; i < BLOCK_CUBE_OFFSET_X.length; i++) {
-                                world.spawnParticle(
-                                    particle,
-                                    x + BLOCK_CUBE_OFFSET_X[i],
-                                    y + BLOCK_CUBE_OFFSET_Y[i],
-                                    z + BLOCK_CUBE_OFFSET_Z[i],
-                                    1,
-                                    0,
-                                    0,
-                                    0,
-                                    0);
-                            }
-                        },
-                        time / 50);
+                FoliaSupport.runRegionDelayed(
+                    location,
+                    time / 50,
+                    () -> {
+                        for (int i = 0; i < BLOCK_CUBE_OFFSET_X.length; i++) {
+                            world.spawnParticle(
+                                particle,
+                                x + BLOCK_CUBE_OFFSET_X[i],
+                                y + BLOCK_CUBE_OFFSET_Y[i],
+                                z + BLOCK_CUBE_OFFSET_Z[i],
+                                1,
+                                0,
+                                0,
+                                0,
+                                0);
+                        }
+                    });
             }
             time += (int) interval;
         }
@@ -312,11 +304,12 @@ public class ParticleUtil {
 
     public static void highlightBlock(@NotNull Player player, @NotNull Location location, int shrinkTimes) {
         for (int i = 0; i < shrinkTimes; i++) {
-            Bukkit.getScheduler().runTaskLaterAsynchronously(
-                    Networks.getInstance(), () -> {
-                drawLineFrom(player.getEyeLocation().clone().add(0D, -0.5D, 0D), location);
-                highlightBlock(location);
-            }, 20L * i);
+            final long delayTicks = 20L * i;
+            FoliaSupport.runPlayer(player, () ->
+                FoliaSupport.runRegionDelayed(location, delayTicks, () -> {
+                    drawLineFrom(player.getEyeLocation().clone().add(0D, -0.5D, 0D), location);
+                    highlightBlock(location);
+                }));
         }
     }
 }

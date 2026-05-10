@@ -19,7 +19,6 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -104,30 +103,31 @@ public class StorageUnitData {
     }
 
     public static void addPersistentAccessHistory(Location location, Integer accessLocation) {
-        Map<Integer, Integer> locations = persistentAccessHistory.getOrDefault(location, new ConcurrentHashMap<>());
+        Map<Integer, Integer> locations =
+            persistentAccessHistory.computeIfAbsent(location, ignored -> new ConcurrentHashMap<>());
         locations.put(accessLocation, 0);
-        persistentAccessHistory.put(location, locations);
     }
 
     public static void addCacheMiss(Location location, Integer accessLocation) {
-        Map<Integer, Integer> locations = persistentAccessHistory.getOrDefault(location, new ConcurrentHashMap<>());
+        Map<Integer, Integer> locations =
+            persistentAccessHistory.computeIfAbsent(location, ignored -> new ConcurrentHashMap<>());
         int value = locations.getOrDefault(accessLocation, 0) + 1;
         if (value > NetworkRoot.cacheMissThreshold) {
             removePersistentAccessHistory(location, accessLocation);
             return;
         }
         locations.put(accessLocation, value);
-        persistentAccessHistory.put(location, locations);
     }
 
     public static void minusCacheMiss(Location location, Integer accessLocation) {
-        Map<Integer, Integer> locations = persistentAccessHistory.getOrDefault(location, new ConcurrentHashMap<>());
+        Map<Integer, Integer> locations =
+            persistentAccessHistory.computeIfAbsent(location, ignored -> new ConcurrentHashMap<>());
         int value = Math.max(locations.getOrDefault(accessLocation, 0) - 1, 0);
         locations.put(accessLocation, value);
     }
 
     public static Map<Integer, Integer> getPersistentAccessHistory(Location location) {
-        return persistentAccessHistory.getOrDefault(location, new ConcurrentHashMap<>());
+        return persistentAccessHistory.computeIfAbsent(location, ignored -> new ConcurrentHashMap<>());
     }
 
     public static void removePersistentAccessHistory(Location location) {
@@ -135,13 +135,19 @@ public class StorageUnitData {
     }
 
     public static void removePersistentAccessHistory(Location location, Integer accessLocation) {
-        Map<Integer, Integer> locations = persistentAccessHistory.getOrDefault(location, new ConcurrentHashMap<>());
+        Map<Integer, Integer> locations = persistentAccessHistory.get(location);
+        if (locations == null) {
+            return;
+        }
         locations.remove(accessLocation);
-        persistentAccessHistory.put(location, locations);
+        if (locations.isEmpty()) {
+            persistentAccessHistory.remove(location, locations);
+        }
     }
 
     public static void addCountObservingAccessHistory(Location location, Integer accessLocation) {
-        Map<Integer, Integer> locations = observingAccessHistory.getOrDefault(location, new HashMap<>());
+        Map<Integer, Integer> locations =
+            observingAccessHistory.computeIfAbsent(location, ignored -> new ConcurrentHashMap<>());
         Integer count = locations.getOrDefault(accessLocation, 0);
         if (count >= NetworkRoot.persistentThreshold) {
             removeCountObservingAccessHistory(location, accessLocation);
@@ -149,11 +155,10 @@ public class StorageUnitData {
             return;
         }
         locations.put(accessLocation, count + 1);
-        observingAccessHistory.put(location, locations);
     }
 
     public static Map<Integer, Integer> getCountObservingAccessHistory(Location location) {
-        return observingAccessHistory.getOrDefault(location, new ConcurrentHashMap<>());
+        return observingAccessHistory.computeIfAbsent(location, ignored -> new ConcurrentHashMap<>());
     }
 
     public static void removeCountObservingAccessHistory(Location location) {
@@ -161,9 +166,14 @@ public class StorageUnitData {
     }
 
     public static void removeCountObservingAccessHistory(Location location, Integer accessLocation) {
-        Map<Integer, Integer> locations = observingAccessHistory.getOrDefault(location, new ConcurrentHashMap<>());
+        Map<Integer, Integer> locations = observingAccessHistory.get(location);
+        if (locations == null) {
+            return;
+        }
         locations.remove(accessLocation);
-        observingAccessHistory.put(location, locations);
+        if (locations.isEmpty()) {
+            observingAccessHistory.remove(location, locations);
+        }
     }
 
     public static boolean isBlacklisted(@NotNull ItemStack itemStack) {

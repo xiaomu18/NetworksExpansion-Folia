@@ -33,6 +33,8 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class NetworkPurger extends NetworkObject {
 
@@ -57,16 +59,16 @@ public class NetworkPurger extends NetworkObject {
 
         addItemHandler(
             new BlockTicker() {
-
-                private int tick = 1;
+                private final Map<Block, Integer> tickMap = new ConcurrentHashMap<>();
 
                 @Override
                 public boolean isSynchronized() {
-                    return false;
+                    return runSync();
                 }
 
                 @Override
                 public void tick(@NotNull Block block, SlimefunItem item, @NotNull SlimefunBlockData data) {
+                    final int tick = tickMap.getOrDefault(block, 1);
                     if (tick <= 1) {
                         BlockMenu blockMenu = data.getBlockMenu();
                         if (blockMenu == null) {
@@ -75,11 +77,7 @@ public class NetworkPurger extends NetworkObject {
                         addToRegistry(block);
                         tryKillItem(blockMenu);
                     }
-                }
-
-                @Override
-                public void uniqueTick() {
-                    tick = tick <= 1 ? tickRate.getValue() : tick - 1;
+                    tickMap.put(block, tick <= 1 ? tickRate.getValue() : tick - 1);
                 }
             },
             new BlockBreakHandler(true, true) {

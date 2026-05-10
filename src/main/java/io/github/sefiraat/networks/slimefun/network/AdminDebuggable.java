@@ -3,43 +3,42 @@ package io.github.sefiraat.networks.slimefun.network;
 import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import io.github.sefiraat.networks.Networks;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.thebusybiscuit.slimefun4.libraries.dough.collections.Pair;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.HashSet;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.logging.Level;
 
 @SuppressWarnings("JavaExistingMethodCanBeUsed")
 public interface AdminDebuggable {
     Queue<Pair<Location, String>> DEBUG_QUEUE = new ConcurrentLinkedQueue<>();
-    Set<Player> VIEWERS = new HashSet<>();
+    Set<Player> VIEWERS = ConcurrentHashMap.newKeySet();
     String DEBUG_KEY = "network_debugging";
 
     static void load() {
-        Bukkit.getScheduler()
-            .runTaskTimerAsynchronously(
-                Networks.getInstance(),
-                () -> {
-                    while (!DEBUG_QUEUE.isEmpty()) {
-                        final Pair<Location, String> pair = DEBUG_QUEUE.poll();
-                        if (pair != null) {
-                            Location v1 = pair.getFirstValue();
-                            String v2 = pair.getSecondValue();
-                            if (v1 == null || v2 == null) {
-                                continue;
-                            }
-                            sendDebugMessage1(v1, v2);
+        FoliaSupport.runAsyncRepeating(
+            50L,
+            500L,
+            java.util.concurrent.TimeUnit.MILLISECONDS,
+            () -> {
+                while (!DEBUG_QUEUE.isEmpty()) {
+                    final Pair<Location, String> pair = DEBUG_QUEUE.poll();
+                    if (pair != null) {
+                        Location v1 = pair.getFirstValue();
+                        String v2 = pair.getSecondValue();
+                        if (v1 == null || v2 == null) {
+                            continue;
                         }
+                        sendDebugMessage1(v1, v2);
                     }
-                },
-                1L,
-                10L);
+                }
+            });
     }
 
     static boolean isDebug0(@NotNull Location location) {
@@ -63,7 +62,12 @@ public interface AdminDebuggable {
             .log(Level.INFO, String.format(Lang.getString("messages.debug.info"), locationString, string));
         for (Player player : VIEWERS) {
             if (player.isOnline()) {
-                player.sendMessage(String.format(Lang.getString("messages.debug.viewer-info"), locationString, string));
+                FoliaSupport.runPlayer(
+                    player,
+                    () -> player.sendMessage(String.format(
+                        Lang.getString("messages.debug.viewer-info"),
+                        locationString,
+                        string)));
             } else {
                 removeViewer0(player);
             }

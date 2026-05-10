@@ -6,6 +6,7 @@ import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.machines.AdvancedDirectional;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -133,22 +134,24 @@ public class AdvancedWirelessTransmitter extends AdvancedDirectional implements 
                     blockMenu.addMenuClickHandler(getCargoNumberSlot(), (player, i, itemStack, clickAction) -> {
                         player.sendMessage(ChatColors.color("&e输入数量"));
                         ChatUtils.awaitInput(player, input -> {
-                            try {
-                                int value = Calculator.calculate(input).intValue();
-                                if (value <= 0 || value > getMaxLimit()) {
-                                    player.sendMessage("请输入 1 ~ " + getMaxLimit() + " 之间的正整数");
+                            FoliaSupport.runPlayer(player, () -> {
+                                try {
+                                    int value = Calculator.calculate(input).intValue();
+                                    if (value <= 0 || value > getMaxLimit()) {
+                                        player.sendMessage("请输入 1 ~ " + getMaxLimit() + " 之间的正整数");
+                                        BlockMenu menu = StorageCacheUtils.getMenu(location);
+                                        if (menu != null) menu.open(player);
+                                        return;
+                                    }
+
+                                    setLimitQuantity(location, value);
+                                    updateShowIcon(location);
                                     BlockMenu menu = StorageCacheUtils.getMenu(location);
                                     if (menu != null) menu.open(player);
-                                    return;
+                                } catch (NumberFormatException e) {
+                                    player.sendMessage(e.getMessage());
                                 }
-
-                                setLimitQuantity(location, value);
-                                updateShowIcon(location);
-                                BlockMenu menu = StorageCacheUtils.getMenu(location);
-                                if (menu != null) menu.open(player);
-                            } catch (NumberFormatException e) {
-                                player.sendMessage(e.getMessage());
-                            }
+                            });
                         });
                         return false;
                     });
@@ -190,6 +193,11 @@ public class AdvancedWirelessTransmitter extends AdvancedDirectional implements 
         Location target = getTargetLocation(location);
         if (target == null) {
             sendFeedback(location, FeedbackType.NO_TARGET_LOCATION);
+            return;
+        }
+
+        if (target.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(target)) {
+            sendFeedback(location, FeedbackType.NO_TARGET_NETWORK_FOUND);
             return;
         }
 

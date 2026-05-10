@@ -50,9 +50,9 @@ import org.jspecify.annotations.NullMarked;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @NullMarked
 @SuppressWarnings("DuplicatedCode")
@@ -87,7 +87,7 @@ public class SmartNetworkCraftingGridNewStyle extends AbstractGridNewStyle imple
         9, 10, 11,
         18, 19, 20
     };
-    private static final Map<Location, GridCache> CACHE_MAP = new HashMap<>();
+    private static final Map<Location, GridCache> CACHE_MAP = new ConcurrentHashMap<>();
     public static int THRESHOLD = 4096;
     private final Keybinds smartOutsideKeybinds = Keybinds.create(Keys.newKey("smart-outside-keybinds"), it -> {
             it.usableKeybinds(

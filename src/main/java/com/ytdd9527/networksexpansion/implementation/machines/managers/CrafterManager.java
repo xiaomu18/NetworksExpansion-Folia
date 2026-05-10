@@ -13,6 +13,7 @@ import com.ytdd9527.networksexpansion.core.items.machines.AbstractAdvancedAutoCr
 import com.ytdd9527.networksexpansion.core.items.machines.AbstractAutoCrafter;
 import com.ytdd9527.networksexpansion.core.items.unusable.AbstractBlueprint;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.ParticleUtil;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import com.ytdd9527.networksexpansion.utils.itemstacks.ItemStackUtil;
@@ -65,10 +66,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"DuplicatedCode"})
 public class CrafterManager extends NetworkObject {
-    private static final Map<Location, GridCache> CACHE_MAP = new HashMap<>();
+    private static final Map<Location, GridCache> CACHE_MAP = new ConcurrentHashMap<>();
+    private static final Map<Location, Integer> TICK_MAP = new ConcurrentHashMap<>();
     private static final int[] BACKGROUND_SLOTS = new int[]{8, 17, 26, 35};
     private static final int[] DISPLAY_SLOTS = {
         0, 1, 2, 3, 4, 5, 6, 7,
@@ -101,31 +104,33 @@ public class CrafterManager extends NetworkObject {
         addItemSetting(this.tickRate);
 
         addItemHandler(new BlockTicker() {
-
-            private int tick = 1;
-
             @Override
             public boolean isSynchronized() {
-                return false;
+                return true;
             }
 
             @Override
             public void tick(@NotNull Block block, SlimefunItem item, @NotNull SlimefunBlockData data) {
-                if (tick <= 1) {
-                    final BlockMenu blockMenu = data.getBlockMenu();
-                    if (blockMenu == null) {
-                        return;
-                    }
-                    addToRegistry(block);
-                    updateDisplay(blockMenu);
+                Location location = block.getLocation();
+                int tick = TICK_MAP.getOrDefault(location, 1);
+                if (tick > 1) {
+                    TICK_MAP.put(location, tick - 1);
+                    return;
                 }
-            }
 
-            @Override
-            public void uniqueTick() {
-                tick = tick <= 1 ? tickRate.getValue() : tick - 1;
+                TICK_MAP.put(location, tickRate.getValue());
+                final BlockMenu blockMenu = data.getBlockMenu();
+                if (blockMenu == null) {
+                    return;
+                }
+                addToRegistry(block);
+                updateDisplay(blockMenu);
             }
         });
+    }
+
+    private static boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
     public static @Nullable String getCrafterName(@NotNull Location crafterLocation) {
@@ -200,6 +205,10 @@ public class CrafterManager extends NetworkObject {
 
     @ParametersAreNonnullByDefault
     public static void openMenu(Player player, Location location, Location managerLocation) {
+        if (!canDirectlyAccess(location)) {
+            player.sendMessage(FeedbackType.NO_TARGET_BLOCK.getMessage());
+            return;
+        }
         BlockMenu menu = StorageCacheUtils.getMenu(location);
         if (menu == null) {
             return;
@@ -208,14 +217,19 @@ public class CrafterManager extends NetworkObject {
         menu.addMenuCloseHandler(p -> {
             menu.addMenuCloseHandler(p2 -> {
             });
-            BlockMenu managerMenu = StorageCacheUtils.getMenu(managerLocation);
-            if (managerMenu == null) {
-                return;
-            }
+            FoliaSupport.runPlayer(p, () -> {
+                if (!canDirectlyAccess(managerLocation)) {
+                    return;
+                }
+                BlockMenu managerMenu = StorageCacheUtils.getMenu(managerLocation);
+                if (managerMenu == null) {
+                    return;
+                }
 
-            managerMenu.open(p);
+                managerMenu.open(p);
+            });
         });
-        menu.open(player);
+        FoliaSupport.runPlayer(player, () -> menu.open(player));
     }
 
     public void tryInsertBlueprint(
@@ -428,7 +442,7 @@ public class CrafterManager extends NetworkObject {
                 }
 
                 Location crafterLocation = data.location();
-                BlockMenu menu = StorageCacheUtils.getMenu(crafterLocation);
+                BlockMenu menu = canDirectlyAccess(crafterLocation) ? StorageCacheUtils.getMenu(crafterLocation) : null;
                 if (menu != null) {
                     ItemStack blueprint = menu.getItemInSlot(AbstractAutoCrafter.BLUEPRINT_SLOT);
                     if (blueprint != null && blueprint.getType() != Material.AIR && SlimefunItem.getByItem(blueprint) instanceof CraftTyped craftTyped) {
@@ -667,21 +681,23 @@ public class CrafterManager extends NetworkObject {
         player.sendMessage(Lang.getString("messages.normal-operation.manager.set_name"));
         player.closeInventory();
         ChatUtils.awaitInput(player, s -> {
-            StorageCacheUtils.setData(crafterLocation, BS_NAME, s);
-            player.sendMessage(Lang.getString("messages.completed-operation.manager.set_name"));
+            FoliaSupport.runPlayer(player, () -> {
+                StorageCacheUtils.setData(crafterLocation, BS_NAME, s);
+                player.sendMessage(Lang.getString("messages.completed-operation.manager.set_name"));
 
-            SlimefunBlockData data = StorageCacheUtils.getBlock(managerMenu.getLocation());
-            if (data == null) {
-                return;
-            }
-
-            if (managerMenu.getPreset().getID().equals(data.getSfId())) {
-                BlockMenu actualMenu = data.getBlockMenu();
-                if (actualMenu != null) {
-                    updateDisplay(actualMenu);
-                    actualMenu.open(player);
+                SlimefunBlockData data = StorageCacheUtils.getBlock(managerMenu.getLocation());
+                if (data == null) {
+                    return;
                 }
-            }
+
+                if (managerMenu.getPreset().getID().equals(data.getSfId())) {
+                    BlockMenu actualMenu = data.getBlockMenu();
+                    if (actualMenu != null) {
+                        updateDisplay(actualMenu);
+                        actualMenu.open(player);
+                    }
+                }
+            });
         });
     }
 
@@ -696,6 +712,10 @@ public class CrafterManager extends NetworkObject {
         ItemStack clickedItemStack,
         ClickAction clickAction,
         boolean dropAction) {
+        if (!canDirectlyAccess(crafterLocation)) {
+            player.sendMessage(FeedbackType.NO_TARGET_BLOCK.getMessage());
+            return;
+        }
         BlockMenu crafterMenu = StorageCacheUtils.getMenu(crafterLocation);
         if (crafterMenu == null) {
             return;

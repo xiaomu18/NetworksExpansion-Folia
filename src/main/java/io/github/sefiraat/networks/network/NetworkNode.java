@@ -1,8 +1,8 @@
 package io.github.sefiraat.networks.network;
 
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
-import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.slimefun.network.NetworkController;
 import io.github.sefiraat.networks.slimefun.network.NetworkPowerNode;
 import io.github.thebusybiscuit.slimefun4.api.items.SlimefunItem;
@@ -11,15 +11,14 @@ import lombok.Getter;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.BlockFace;
-import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.EnumSet;
-import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class NetworkNode {
 
@@ -27,7 +26,7 @@ public class NetworkNode {
         EnumSet.of(BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST);
 
     @Getter
-    protected final Set<NetworkNode> childrenNodes = new HashSet<>();
+    protected final Set<NetworkNode> childrenNodes = ConcurrentHashMap.newKeySet();
 
     protected final Location nodePosition;
     protected final NodeType nodeType;
@@ -101,6 +100,9 @@ public class NetworkNode {
             // Loop through all possible locations
             for (BlockFace face : VALID_FACES) {
                 final Location testLocation = currentNode.nodePosition.clone().add(face.getDirection());
+                if (testLocation.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(testLocation)) {
+                    continue;
+                }
                 final NodeDefinition testDefinition = NetworkStorage.getNode(testLocation);
 
                 if (testDefinition == null) {
@@ -133,21 +135,17 @@ public class NetworkNode {
     }
 
     private void killAdditionalController(@NotNull Location location) {
-        SlimefunItem sfItem = StorageCacheUtils.getSfItem(location);
-        if (sfItem != null) {
+        FoliaSupport.runRegion(location, () -> {
+            SlimefunItem sfItem = StorageCacheUtils.getSfItem(location);
+            if (sfItem == null || location.getWorld() == null) {
+                return;
+            }
             Slimefun.getDatabaseManager().getBlockDataController().removeBlock(location);
-            BukkitRunnable runnable = new BukkitRunnable() {
-                @Override
-                public void run() {
-                    // fix #99
-                    NetworkController.wipeNetwork(location);
-                    location.getWorld().dropItemNaturally(location, sfItem.getItem());
-                    location.getBlock().setType(Material.AIR);
-                }
-            };
-            runnable.runTask(Networks.getInstance());
             NetworkController.wipeNetwork(location);
-        }
+            location.getWorld().dropItemNaturally(location, sfItem.getItem());
+            location.getBlock().setType(Material.AIR);
+            NetworkController.wipeNetwork(location);
+        });
     }
 
     protected long retrieveBlockCharge() {

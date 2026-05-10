@@ -2,23 +2,30 @@ package com.ytdd9527.networksexpansion.utils.databases;
 
 import com.balugaq.netex.utils.Debug;
 import com.balugaq.netex.utils.Lang;
-import io.github.sefiraat.networks.Networks;
-import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.TimeUnit;
 
 public class QueryQueue {
 
     private final @NotNull BlockingQueue<QueuedTask> updateTasks;
     private final @NotNull BlockingQueue<QueuedTask> queryTasks;
+    private final @NotNull ExecutorService executorService;
     private boolean threadStarted;
 
     public QueryQueue() {
         // Create database query processing thread
         updateTasks = new LinkedBlockingDeque<>();
         queryTasks = new LinkedBlockingDeque<>();
+        executorService = Executors.newFixedThreadPool(2, task -> {
+            Thread thread = new Thread(task, "NetworksExpansion-QueryQueue");
+            thread.setDaemon(true);
+            return thread;
+        });
 
         threadStarted = false;
     }
@@ -39,8 +46,8 @@ public class QueryQueue {
 
     public void startThread() {
         if (!threadStarted) {
-            getProcessor(queryTasks).runTaskAsynchronously(Networks.getInstance());
-            getProcessor(updateTasks).runTaskAsynchronously(Networks.getInstance());
+            executorService.submit(getProcessor(queryTasks));
+            executorService.submit(getProcessor(updateTasks));
             threadStarted = true;
         }
     }
@@ -67,21 +74,26 @@ public class QueryQueue {
         };
         queryTasks.offer(abortTask);
         updateTasks.offer(abortTask);
+        executorService.shutdown();
     }
 
-    private @NotNull BukkitRunnable getProcessor(@NotNull BlockingQueue<QueuedTask> queue) {
-        return new BukkitRunnable() {
-            @Override
-            public void run() {
-                while (true) {
-                    try {
-                        QueuedTask task = queue.take();
-                        if (task.execute() && task.callback()) {
-                            break;
-                        }
-                    } catch (Exception e) {
-                        Debug.trace(e);
+    public boolean awaitShutdown(long timeout, @NotNull TimeUnit unit) throws InterruptedException {
+        return executorService.awaitTermination(timeout, unit);
+    }
+
+    private @NotNull Runnable getProcessor(@NotNull BlockingQueue<QueuedTask> queue) {
+        return () -> {
+            while (true) {
+                try {
+                    QueuedTask task = queue.take();
+                    if (task.execute() && task.callback()) {
+                        break;
                     }
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    Debug.trace(e);
                 }
             }
         };

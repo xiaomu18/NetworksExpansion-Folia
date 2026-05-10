@@ -11,6 +11,7 @@ import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.managers.ConfigManager;
 import com.ytdd9527.networksexpansion.core.services.LocalizationService;
 import com.ytdd9527.networksexpansion.setup.SetupUtil;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.databases.DataSource;
 import com.ytdd9527.networksexpansion.utils.databases.DataStorage;
 import com.ytdd9527.networksexpansion.utils.databases.QueryQueue;
@@ -28,7 +29,6 @@ import io.github.thebusybiscuit.slimefun4.core.guide.options.SlimefunGuideSettin
 import io.github.thebusybiscuit.slimefun4.implementation.Slimefun;
 import io.github.thebusybiscuit.slimefun4.libraries.paperlib.PaperLib;
 import lombok.Getter;
-import net.guizhanss.guizhanlibplugin.updater.GuizhanUpdater;
 import org.bstats.bukkit.Metrics;
 import org.bstats.charts.AdvancedPie;
 import org.bukkit.Bukkit;
@@ -36,7 +36,7 @@ import org.bukkit.Location;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitRunnable;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.yaml.snakeyaml.error.YAMLException;
@@ -48,6 +48,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 
 public class Networks extends JavaPlugin implements SlimefunAddon {
@@ -61,7 +62,7 @@ public class Networks extends JavaPlugin implements SlimefunAddon {
     private static QueryQueue queryQueue;
 
     @Getter
-    private static BukkitRunnable autoSaveThread;
+    private static ScheduledTask autoSaveThread;
 
     private static MinecraftVersion minecraftVersion = MinecraftVersion.UNKNOWN;
     private final @NotNull String username;
@@ -111,6 +112,7 @@ public class Networks extends JavaPlugin implements SlimefunAddon {
     @Override
     public void onEnable() {
         instance = this;
+        FoliaSupport.ensureFolia(this);
 
         getLogger().info("Loading language");
         this.configManager = new ConfigManager();
@@ -133,7 +135,6 @@ public class Networks extends JavaPlugin implements SlimefunAddon {
         saveDefaultConfig();
 
         getLogger().info(getLocalizationService().getString("messages.startup.trying-auto-update"));
-        tryUpdate();
 
         this.supportedPluginManager = new SupportedPluginManager();
 
@@ -152,16 +153,14 @@ public class Networks extends JavaPlugin implements SlimefunAddon {
         queryQueue.startThread();
 
         getLogger().info(getLocalizationService().getString("messages.startup.creating-auto-save-thread"));
-        autoSaveThread = new BukkitRunnable() {
-            @Override
-            public void run() {
-                DataStorage.saveAmountChange();
-            }
-        };
         int seconds = getConfig().getInt("drawer-auto-save-period");
         seconds = seconds <= 0 ? 300 : seconds;
         long period = 20L * seconds;
-        autoSaveThread.runTaskTimerAsynchronously(this, 2 * period, period);
+        autoSaveThread = FoliaSupport.runAsyncRepeating(
+            2L * seconds,
+            seconds,
+            java.util.concurrent.TimeUnit.SECONDS,
+            DataStorage::saveAmountChange);
 
         getLogger().info(getLocalizationService().getString("messages.startup.registering-items"));
         SetupUtil.setupAll();
@@ -176,48 +175,11 @@ public class Networks extends JavaPlugin implements SlimefunAddon {
 
         setupMetrics();
 
-        Bukkit.getScheduler()
-            .runTaskTimer(
-                this,
-                () -> slimefunTickCount++,
-                1,
-                Slimefun.getTickerTask().getTickRate());
-
-        // Fix dupe bug which break the network controller data without player interaction
-        Bukkit.getScheduler()
-            .runTaskTimer(
-                this,
-                () -> {
-                    Set<Location> wrongs = new HashSet<>();
-                    Set<Location> controllers = new HashSet<>(
-                        NetworkController.getNetworks().keySet());
-                    for (Location controller : controllers) {
-                        SlimefunBlockData data = StorageCacheUtils.getBlock(controller);
-                        if (data == null
-                            || !NetworksSlimefunItemStacks.NETWORK_CONTROLLER
-                            .getItemId()
-                            .equals(data.getSfId())) {
-                            wrongs.add(controller);
-                        }
-                    }
-
-                    for (Location wrong : wrongs) {
-                        NetworkUtils.clearNetwork(wrong);
-                    }
-                },
-                1,
-                Slimefun.getTickerTask().getTickRate());
-
-        Bukkit.getScheduler()
-            .runTaskTimer(
-                this,
-                () -> NetworkController.getRecords().values().forEach(ItemFlowRecord::gc),
-                1,
-                Slimefun.getTickerTask().getTickRate());
+        FoliaSupport.runGlobalRepeating(1, Slimefun.getTickerTask().getTickRate(), () -> slimefunTickCount++);
 
         AdminDebuggable.load();
         SlimefunGuideSettings.addOption(GridNewStyleCustomAmountGuideOption.instance());
-        Bukkit.getScheduler().runTaskLaterAsynchronously(this, Keybinds::distinctAll, 1L);
+        FoliaSupport.runGlobalDelayed(1L, Keybinds::distinctAll);
         ID.fetchId();
         Keybinds.fetchScripts();
         getLogger().info(getLocalizationService().getString("messages.startup.enabled-successfully"));
@@ -239,28 +201,21 @@ public class Networks extends JavaPlugin implements SlimefunAddon {
         }
         DataStorage.saveAmountChange();
         if (queryQueue != null) {
-            while (!queryQueue.isAllDone()) {
-                getLogger()
-                    .info(String.format(
-                        getLocalizationService().getString("messages.shutdown.saving-data"),
-                        queryQueue.getTaskAmount()));
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    Debug.trace(e);
-                }
-            }
             queryQueue.scheduleAbort();
+            try {
+                if (!queryQueue.awaitShutdown(15, TimeUnit.SECONDS)) {
+                    getLogger()
+                        .warning(String.format(
+                            getLocalizationService().getString("messages.shutdown.saving-data"),
+                            queryQueue.getTaskAmount()));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                Debug.trace(e);
+            }
         }
         getLogger().info(getLocalizationService().getString("messages.shutdown.saved-all-data"));
         getLogger().info(getLocalizationService().getString("messages.shutdown.disabled-successfully"));
-    }
-
-    @SuppressWarnings("deprecation")
-    public void tryUpdate() {
-        if (configManager.isAutoUpdate() && getDescription().getVersion().startsWith("Build")) {
-            GuizhanUpdater.start(this, getFile(), username, repo, branch);
-        }
     }
 
     public void superHead() {

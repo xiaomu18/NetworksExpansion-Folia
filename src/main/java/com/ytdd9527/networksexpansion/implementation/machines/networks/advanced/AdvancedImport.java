@@ -30,6 +30,8 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class AdvancedImport extends NetworkObject implements RecipeDisplayItem {
     private static final int[] INPUT_SLOTS = new int[]{
@@ -57,16 +59,16 @@ public class AdvancedImport extends NetworkObject implements RecipeDisplayItem {
         }
 
         addItemHandler(new BlockTicker() {
-
-            private int tick = 1;
+            private final Map<Block, Integer> tickMap = new ConcurrentHashMap<>();
 
             @Override
             public boolean isSynchronized() {
-                return false;
+                return runSync();
             }
 
             @Override
             public void tick(@NotNull Block block, SlimefunItem item, @NotNull SlimefunBlockData data) {
+                final int tick = tickMap.getOrDefault(block, 1);
                 if (tick <= 1) {
                     final BlockMenu blockMenu = data.getBlockMenu();
                     if (blockMenu == null) {
@@ -75,11 +77,7 @@ public class AdvancedImport extends NetworkObject implements RecipeDisplayItem {
                     addToRegistry(block);
                     tryAddItem(blockMenu);
                 }
-            }
-
-            @Override
-            public void uniqueTick() {
-                tick = tick <= 1 ? tickRate.getValue() : tick - 1;
+                tickMap.put(block, tick <= 1 ? tickRate.getValue() : tick - 1);
             }
         });
     }

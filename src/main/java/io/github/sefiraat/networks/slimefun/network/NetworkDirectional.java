@@ -7,6 +7,7 @@ import com.balugaq.netex.utils.NetworksVersionedEnchantment;
 import com.balugaq.netex.utils.NetworksVersionedParticle;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import com.ytdd9527.networksexpansion.utils.itemstacks.ItemStackUtil;
 import io.github.sefiraat.networks.NetworkStorage;
@@ -51,11 +52,10 @@ import javax.annotation.OverridingMethodsMustInvokeSuper;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"deprecation", "DuplicatedCode"})
 public abstract class NetworkDirectional extends NetworkObject {
@@ -70,8 +70,8 @@ public abstract class NetworkDirectional extends NetworkObject {
     private static final int WEST_SLOT = 20;
     private static final int UP_SLOT = 15;
     private static final int DOWN_SLOT = 33;
-    private static final Set<Location> locked = new HashSet<>();
-    protected static final Map<Location, BlockFace> SELECTED_DIRECTION_MAP = new HashMap<>();
+    private static final Set<Location> locked = ConcurrentHashMap.newKeySet();
+    protected static final Map<Location, BlockFace> SELECTED_DIRECTION_MAP = new ConcurrentHashMap<>();
 
     private final @NotNull ItemSetting<Integer> tickRate;
 
@@ -96,8 +96,7 @@ public abstract class NetworkDirectional extends NetworkObject {
         addItemSetting(this.tickRate);
 
         addItemHandler(new BlockTicker() {
-
-            private int tick = 1;
+            private final Map<Location, Integer> tickMap = new ConcurrentHashMap<>();
 
             @Override
             public boolean isSynchronized() {
@@ -106,17 +105,17 @@ public abstract class NetworkDirectional extends NetworkObject {
 
             @Override
             public void tick(@NotNull Block block, SlimefunItem slimefunItem, @NotNull SlimefunBlockData data) {
+                final Location location = block.getLocation();
+                final int tick = tickMap.getOrDefault(location, 1);
                 if (tick <= 1) {
                     onTick(data.getBlockMenu(), block);
                 }
+                tickMap.put(location, tick <= 1 ? tickRate.getValue() : tick - 1);
             }
 
             @Override
             public void uniqueTick() {
-                tick = tick <= 1 ? tickRate.getValue() : tick - 1;
-                if (tick <= 1) {
-                    onUniqueTick();
-                }
+                onUniqueTick();
             }
         });
     }
@@ -188,6 +187,10 @@ public abstract class NetworkDirectional extends NetworkObject {
         return SELECTED_DIRECTION_MAP.get(location);
     }
 
+    protected boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
+    }
+
     public void updateGui(@Nullable BlockMenu blockMenu) {
         if (blockMenu == null || !blockMenu.hasViewer()) {
             return;
@@ -196,8 +199,12 @@ public abstract class NetworkDirectional extends NetworkObject {
         BlockFace direction = getCurrentDirection(blockMenu);
 
         for (BlockFace blockFace : VALID_FACES) {
-            final Block block = blockMenu.getBlock().getRelative(blockFace);
-            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
+            final Location relativeLocation = blockMenu.getLocation().clone().add(blockFace.getDirection());
+            if (!canDirectlyAccess(relativeLocation)) {
+                continue;
+            }
+            final Block block = relativeLocation.getBlock();
+            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(relativeLocation);
             if (slimefunItem != null) {
                 switch (blockFace) {
                     case NORTH -> blockMenu.replaceExistingItem(
@@ -394,8 +401,11 @@ public abstract class NetworkDirectional extends NetworkObject {
 
     @ParametersAreNonnullByDefault
     public void openDirection(Player player, BlockMenu blockMenu, BlockFace blockFace) {
-        final BlockMenu targetMenu = StorageCacheUtils.getMenu(
-            blockMenu.getBlock().getRelative(blockFace).getLocation());
+        final Location targetLocation = blockMenu.getBlock().getRelative(blockFace).getLocation();
+        if (!canDirectlyAccess(targetLocation)) {
+            return;
+        }
+        final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetLocation);
         if (targetMenu != null) {
             final Location location = targetMenu.getLocation();
             final SlimefunItem item = StorageCacheUtils.getSfItem(location);

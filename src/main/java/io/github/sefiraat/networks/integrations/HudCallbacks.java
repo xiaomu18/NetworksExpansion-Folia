@@ -6,6 +6,7 @@ import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.implementation.machines.networks.advanced.AdvancedGreedyBlock;
 import com.ytdd9527.networksexpansion.implementation.machines.unit.NetworksDrawer;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import io.github.schntgaispock.slimehud.SlimeHUD;
 import io.github.schntgaispock.slimehud.util.HudBuilder;
@@ -41,6 +42,9 @@ public class HudCallbacks {
 
         controller.registerCustomHandler(NetworkGreedyBlock.class, request -> {
             Location location = request.getLocation();
+            if (location.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(location)) {
+                return EMPTY;
+            }
             BlockMenu menu = StorageCacheUtils.getMenu(location);
             if (menu == null) {
                 return EMPTY;
@@ -61,6 +65,9 @@ public class HudCallbacks {
         controller.registerCustomHandler(AdvancedGreedyBlock.class, request -> {
             Player player = request.getPlayer();
             Location location = request.getLocation();
+            if (location.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(location)) {
+                return EMPTY;
+            }
             BlockMenu menu = StorageCacheUtils.getMenu(location);
             if (menu == null) {
                 return EMPTY;

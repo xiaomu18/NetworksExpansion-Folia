@@ -89,6 +89,10 @@ public class NetworkVanillaGrabber extends NetworkDirectional implements SoftCel
         final BlockFace direction = getCurrentDirection(blockMenu);
         final Block block = blockMenu.getBlock();
         final Block targetBlock = block.getRelative(direction);
+        if (!canDirectlyAccess(targetBlock.getLocation())) {
+            sendFeedback(block.getLocation(), FeedbackType.NO_TARGET_BLOCK);
+            return;
+        }
 
         /* Netex - #293
         // No longer check permission

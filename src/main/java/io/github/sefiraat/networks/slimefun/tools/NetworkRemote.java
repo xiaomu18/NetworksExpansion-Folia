@@ -7,6 +7,7 @@ import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
 import com.ytdd9527.networksexpansion.implementation.machines.networks.advanced.NetworkCraftingGridNewStyle;
 import com.ytdd9527.networksexpansion.implementation.machines.networks.advanced.NetworkGridNewStyle;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.slimefun.network.grid.NetworkCraftingGrid;
 import io.github.sefiraat.networks.slimefun.network.grid.NetworkGrid;
 import io.github.sefiraat.networks.utils.Keys;
@@ -41,6 +42,10 @@ public class NetworkRemote extends SpecialSlimefunItem {
 
     private final int range;
 
+    private static boolean canDirectlyAccess(@NotNull Block block) {
+        return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
+    }
+
     public NetworkRemote(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -55,6 +60,11 @@ public class NetworkRemote extends SpecialSlimefunItem {
                 final Optional<Block> optional = e.getClickedBlock();
                 if (optional.isPresent()) {
                     final Block block = optional.get();
+                    if (!canDirectlyAccess(block)) {
+                        player.sendMessage(Theme.ERROR + "Folia 下无法直接绑定另一个 region 中的网格");
+                        e.cancel();
+                        return;
+                    }
                     final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
                     if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)
                         && (slimefunItem instanceof NetworkGrid
@@ -113,6 +123,10 @@ public class NetworkRemote extends SpecialSlimefunItem {
     }
 
     public static void openGrid(@NotNull Location location, @NotNull Player player) {
+        if (location.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(location)) {
+            player.sendMessage(Theme.ERROR + "Folia 下无法直接远程打开另一个 region 中的网格");
+            return;
+        }
         SlimefunBlockData blockData = StorageCacheUtils.getBlock(location);
         if (blockData == null) {
             player.sendMessage(Theme.ERROR + "无法找到绑定的网格");
@@ -122,7 +136,7 @@ public class NetworkRemote extends SpecialSlimefunItem {
         SlimefunItem item = SlimefunItem.getById(blockData.getSfId());
         StorageCacheUtils.executeAfterLoad(
             blockData,
-            () -> {
+            () -> FoliaSupport.runRegion(location, () -> {
                 if ((item instanceof NetworkGrid
                     || item instanceof NetworkCraftingGrid
                     || item instanceof NetworkGridNewStyle)
@@ -131,12 +145,12 @@ public class NetworkRemote extends SpecialSlimefunItem {
                     .hasPermission(player, location, Interaction.INTERACT_BLOCK))) {
                     BlockMenu blockMenu = blockData.getBlockMenu();
                     if (blockMenu != null) {
-                        blockMenu.open(player);
+                        FoliaSupport.runPlayer(player, () -> blockMenu.open(player));
                     }
                 } else {
                     player.sendMessage(Lang.getString("messages.unsupported-operation.remote.not_a_grid_found"));
                 }
-            },
+            }),
             false);
     }
 

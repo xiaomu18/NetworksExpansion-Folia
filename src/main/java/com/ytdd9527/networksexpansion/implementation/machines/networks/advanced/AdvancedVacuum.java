@@ -9,7 +9,6 @@ import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import dev.sefiraat.sefilib.misc.ParticleUtils;
 import io.github.sefiraat.networks.NetworkStorage;
-import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.managers.SupportedPluginManager;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
@@ -58,8 +57,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
 public class AdvancedVacuum extends NetworkObject {
-    public static final Map<Location, FilterMode> CACHE_FILTER_MODE = new HashMap<>();
-    public static final Map<Location, MatchMode> CACHE_MATCH_MODE = new HashMap<>();
+    public static final Map<Location, FilterMode> CACHE_FILTER_MODE = new ConcurrentHashMap<>();
+    public static final Map<Location, MatchMode> CACHE_MATCH_MODE = new ConcurrentHashMap<>();
     public static final String BS_FILTER_MODE = "filter-mode";
     public static final String BS_MATCH_MODE = "match-mode";
     public static final Map<Location, List<ItemStack>> CACHE_FILTER_ITEMS = new ConcurrentHashMap<>();
@@ -96,16 +95,16 @@ public class AdvancedVacuum extends NetworkObject {
         }
 
         addItemHandler(new BlockTicker() {
-
-            private int tick = 1;
+            private final Map<Block, Integer> tickMap = new ConcurrentHashMap<>();
 
             @Override
             public boolean isSynchronized() {
-                return false;
+                return runSync();
             }
 
             @Override
             public void tick(@NotNull Block block, SlimefunItem item, @NotNull SlimefunBlockData data) {
+                final int tick = tickMap.getOrDefault(block, 1);
                 if (tick <= 1) {
                     final BlockMenu blockMenu = data.getBlockMenu();
                     if (blockMenu == null) {
@@ -114,13 +113,9 @@ public class AdvancedVacuum extends NetworkObject {
 
                     addToRegistry(block);
                     tryAddItem(blockMenu);
-                    Bukkit.getScheduler().runTask(Networks.getInstance(), bukkitTask -> findItem(blockMenu));
+                    findItem(blockMenu);
                 }
-            }
-
-            @Override
-            public void uniqueTick() {
-                tick = tick <= 1 ? tickRate.getValue() : tick - 1;
+                tickMap.put(block, tick <= 1 ? tickRate.getValue() : tick - 1);
             }
         });
         addItemHandler(new BlockPlaceHandler(false) {

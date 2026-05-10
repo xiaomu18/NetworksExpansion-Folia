@@ -5,6 +5,7 @@ import com.jeff_media.morepersistentdatatypes.DataType;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
 import com.ytdd9527.networksexpansion.implementation.machines.networks.advanced.AdvancedWirelessTransmitter;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.slimefun.network.NetworkWirelessReceiver;
 import io.github.sefiraat.networks.slimefun.network.NetworkWirelessTransmitter;
 import io.github.sefiraat.networks.utils.Keys;
@@ -27,6 +28,9 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Optional;
 
 public class NetworkWirelessConfigurator extends SpecialSlimefunItem {
+    private static boolean canDirectlyAccess(@NotNull Block block) {
+        return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
+    }
 
     public NetworkWirelessConfigurator(
         @NotNull ItemGroup itemGroup,
@@ -39,6 +43,11 @@ public class NetworkWirelessConfigurator extends SpecialSlimefunItem {
             final Optional<Block> optional = e.getClickedBlock();
             if (optional.isPresent()) {
                 final Block block = optional.get();
+                if (!canDirectlyAccess(block)) {
+                    player.sendMessage("§cFolia 下无法直接配置另一个 region 中的方块");
+                    e.cancel();
+                    return;
+                }
                 final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
                 if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)) {
                     final ItemStack heldItem = player.getInventory().getItemInMainHand();

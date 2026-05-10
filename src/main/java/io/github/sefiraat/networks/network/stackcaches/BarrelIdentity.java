@@ -2,6 +2,7 @@ package io.github.sefiraat.networks.network.stackcaches;
 
 import io.github.sefiraat.networks.network.barrel.BarrelCore;
 import io.github.sefiraat.networks.network.barrel.BarrelType;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import lombok.Getter;
 import lombok.Setter;
 import org.bukkit.Location;
@@ -26,5 +27,15 @@ public abstract class BarrelIdentity extends ItemStackCache implements BarrelCor
         this.amount = amount;
         this.limit = limit;
         this.type = type;
+    }
+
+    protected final boolean canDirectlyAccess() {
+        return this.location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(this.location);
+    }
+
+    protected final void requireDirectAccess() {
+        if (!canDirectlyAccess()) {
+            throw new IllegalStateException("Cross-region barrel access at " + this.location);
+        }
     }
 }

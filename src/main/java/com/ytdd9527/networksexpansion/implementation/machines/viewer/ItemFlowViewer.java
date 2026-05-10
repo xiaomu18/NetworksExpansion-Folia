@@ -9,6 +9,7 @@ import com.github.houbb.pinyin.util.PinyinHelper;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.ParticleUtil;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import io.github.sefiraat.networks.NetworkStorage;
@@ -49,15 +50,16 @@ import javax.annotation.ParametersAreNonnullByDefault;
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"DuplicatedCode"})
 public class ItemFlowViewer extends NetworkObject {
     public static final DateFormat DATE_FORMAT = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM);
-    private static final Map<Location, GridCache> CACHE_MAP = new HashMap<>();
+    private static final Map<Location, GridCache> CACHE_MAP = new ConcurrentHashMap<>();
+    private static final Map<Location, Integer> TICK_MAP = new ConcurrentHashMap<>();
     private static final int BACK_SLOT = 8;
     private static final int FORCE_CLEAN_SLOT = 17;
     // ! DO NOT REMOVE THIS
@@ -89,29 +91,27 @@ public class ItemFlowViewer extends NetworkObject {
         addItemSetting(this.tickRate);
 
         addItemHandler(new BlockTicker() {
-
-            private int tick = 1;
-
             @Override
             public boolean isSynchronized() {
-                return false;
+                return true;
             }
 
             @Override
             public void tick(@NotNull Block block, SlimefunItem item, @NotNull SlimefunBlockData data) {
-                if (tick <= 1) {
-                    final BlockMenu blockMenu = data.getBlockMenu();
-                    if (blockMenu == null) {
-                        return;
-                    }
-                    addToRegistry(block);
-                    updateDisplay(blockMenu);
+                Location location = block.getLocation();
+                int tick = TICK_MAP.getOrDefault(location, 1);
+                if (tick > 1) {
+                    TICK_MAP.put(location, tick - 1);
+                    return;
                 }
-            }
 
-            @Override
-            public void uniqueTick() {
-                tick = tick <= 1 ? tickRate.getValue() : tick - 1;
+                TICK_MAP.put(location, tickRate.getValue());
+                final BlockMenu blockMenu = data.getBlockMenu();
+                if (blockMenu == null) {
+                    return;
+                }
+                addToRegistry(block);
+                updateDisplay(blockMenu);
             }
         });
 
@@ -266,6 +266,9 @@ public class ItemFlowViewer extends NetworkObject {
 
     @NotNull
     public static ItemStack getIcon(ItemFlowRecord.@NotNull TransportAction action) {
+        if (action.accessor().getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(action.accessor())) {
+            return Icon.UNKNOWN_ITEM.clone();
+        }
         SlimefunItem sf = StorageCacheUtils.getSfItem(action.accessor());
         if (sf == null) {
             return Icon.UNKNOWN_ITEM.clone();
@@ -625,23 +628,25 @@ public class ItemFlowViewer extends NetworkObject {
                 if (s.isBlank()) {
                     return;
                 }
-                s = s.toLowerCase(Locale.ROOT);
-                gridCache.setFilter(s);
-                getCacheMap().put(blockMenu.getLocation(), gridCache);
-                player.sendMessage(Lang.getString("messages.completed-operation.grid.filter_set"));
+                final String normalized = s.toLowerCase(Locale.ROOT);
+                FoliaSupport.runPlayer(player, () -> {
+                    gridCache.setFilter(normalized);
+                    getCacheMap().put(blockMenu.getLocation(), gridCache);
+                    player.sendMessage(Lang.getString("messages.completed-operation.grid.filter_set"));
 
-                SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
-                if (data == null) {
-                    return;
-                }
-
-                if (blockMenu.getPreset().getID().equals(data.getSfId())) {
-                    BlockMenu actualMenu = data.getBlockMenu();
-                    if (actualMenu != null) {
-                        updateDisplay(actualMenu);
-                        actualMenu.open(player);
+                    SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
+                    if (data == null) {
+                        return;
                     }
-                }
+
+                    if (blockMenu.getPreset().getID().equals(data.getSfId())) {
+                        BlockMenu actualMenu = data.getBlockMenu();
+                        if (actualMenu != null) {
+                            updateDisplay(actualMenu);
+                            actualMenu.open(player);
+                        }
+                    }
+                });
             });
         }
     }

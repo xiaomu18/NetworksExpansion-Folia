@@ -22,6 +22,7 @@ public class FluffyBarrel extends BarrelIdentity {
     public FluffyBarrel(@NotNull Location location, ItemStack itemStack, int amount, int limit, boolean voidExcess) {
         super(location, itemStack, amount, limit, BarrelType.FLUFFY);
         this.voidExcess = voidExcess;
+        requireDirectAccess();
         BlockMenu menu = StorageCacheUtils.getMenu(getLocation());
         Barrel barrel = (Barrel) StorageCacheUtils.getSfItem(getLocation());
         if (barrel != null) {
@@ -32,6 +33,7 @@ public class FluffyBarrel extends BarrelIdentity {
     @Nullable
     @Override
     public ItemStack requestItem(@NotNull ItemRequest itemRequest) {
+        requireDirectAccess();
         BlockMenu menu = StorageCacheUtils.getMenu(getLocation());
         if (menu == null) {
             return null;
@@ -61,6 +63,7 @@ public class FluffyBarrel extends BarrelIdentity {
 
     @Override
     public void depositItemStack(ItemStack @NotNull [] itemsToDeposit) {
+        requireDirectAccess();
         BlockMenu menu = StorageCacheUtils.getMenu(getLocation());
         if (menu == null) {
             return;
@@ -71,6 +74,7 @@ public class FluffyBarrel extends BarrelIdentity {
 
     @Override
     public int[] getInputSlot() {
+        requireDirectAccess();
         BlockMenu menu = StorageCacheUtils.getMenu(getLocation());
         if (menu == null) {
             return new int[0];
@@ -80,6 +84,7 @@ public class FluffyBarrel extends BarrelIdentity {
 
     @Override
     public int[] getOutputSlot() {
+        requireDirectAccess();
         BlockMenu menu = StorageCacheUtils.getMenu(getLocation());
         if (menu == null) {
             return new int[0];

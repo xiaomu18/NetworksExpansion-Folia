@@ -52,8 +52,12 @@ public class NetworkGrabber extends NetworkDirectional implements SoftCellBannab
         }
 
         final BlockFace direction = this.getCurrentDirection(blockMenu);
-        final BlockMenu targetMenu = StorageCacheUtils.getMenu(
-            blockMenu.getBlock().getRelative(direction).getLocation());
+        final Block targetBlock = blockMenu.getBlock().getRelative(direction);
+        if (!canDirectlyAccess(targetBlock.getLocation())) {
+            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
+            return;
+        }
+        final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetBlock.getLocation());
 
         if (targetMenu == null) {
             sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);

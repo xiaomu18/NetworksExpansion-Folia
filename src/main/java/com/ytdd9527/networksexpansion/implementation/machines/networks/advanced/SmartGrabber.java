@@ -4,6 +4,7 @@ import com.balugaq.netex.api.enums.FeedbackType;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -32,10 +33,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.EnumSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * not a {@link NetworkObject} and has no {@link BlockMenu}
@@ -44,7 +45,7 @@ import java.util.Set;
  */
 @SuppressWarnings("DuplicatedCode")
 public class SmartGrabber extends SpecialSlimefunItem implements AdminDebuggable {
-    private static final Map<Location, BlockFace> DIRECTIONS = new HashMap<>();
+    private static final Map<Location, BlockFace> DIRECTIONS = new ConcurrentHashMap<>();
     private static final Set<BlockFace> VALID_FACES =
         EnumSet.of(BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST);
 
@@ -69,13 +70,17 @@ public class SmartGrabber extends SpecialSlimefunItem implements AdminDebuggable
         DIRECTIONS.remove(location);
     }
 
+    private static boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
+    }
+
     @Override
     public void preRegister() {
         addItemHandler(
             new BlockTicker() {
                 @Override
                 public boolean isSynchronized() {
-                    return false;
+                    return true;
                 }
 
                 @Override
@@ -121,6 +126,10 @@ public class SmartGrabber extends SpecialSlimefunItem implements AdminDebuggable
         final BlockFace containerFace = bridgeFace.getOppositeFace();
         final Block bridge = thisBlock.getRelative(bridgeFace);
         final Block container = thisBlock.getRelative(containerFace);
+        if (!canDirectlyAccess(bridge.getLocation()) || !canDirectlyAccess(container.getLocation())) {
+            sendFeedback(thisBlock.getLocation(), FeedbackType.NO_TARGET_BLOCK);
+            return;
+        }
         final NodeDefinition definition = NetworkStorage.getNode(bridge.getLocation());
         if (definition != null && definition.getNode() != null) {
             final BlockMenu targetMenu = StorageCacheUtils.getMenu(container.getLocation());
@@ -148,6 +157,10 @@ public class SmartGrabber extends SpecialSlimefunItem implements AdminDebuggable
                         }
                     }
                 }
+            }
+            else {
+                sendFeedback(thisBlock.getLocation(), FeedbackType.NO_TARGET_BLOCK);
+                return;
             }
             sendFeedback(thisBlock.getLocation(), FeedbackType.WORKING);
         } else {

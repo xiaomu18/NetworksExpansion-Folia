@@ -5,6 +5,7 @@ import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.utils.Debug;
 import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.ReflectionUtil;
 import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.utils.Keys;
@@ -35,19 +36,21 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 @NullMarked
 @SuppressWarnings("deprecation")
 public @Data class Keybinds implements ChestMenu.MenuClickHandler, Keyed {
-    private static final Map<NamespacedKey, LinkedHashMap<Keybind, Action>> defaultKeybinds = new HashMap<>();
-    private static final Map<NamespacedKey, Set<Keybind>> usableKeybind = new HashMap<>();
-    private static final Map<NamespacedKey, Set<Action>> usableAction = new HashMap<>();
+    private static final Map<NamespacedKey, LinkedHashMap<Keybind, Action>> defaultKeybinds = new ConcurrentHashMap<>();
+    private static final Map<NamespacedKey, Set<Keybind>> usableKeybind = new ConcurrentHashMap<>();
+    private static final Map<NamespacedKey, Set<Action>> usableAction = new ConcurrentHashMap<>();
 
-    private static final Map<NamespacedKey, Keybinds> keybindsRegistry = new HashMap<>();
-    private static final Map<NamespacedKey, Keybind> keybindRegistry = new HashMap<>();
-    private static final Map<NamespacedKey, Action> actionRegistry = new HashMap<>();
-    private static final Map<NamespacedKey, List<KeybindsScript>> keybindsScripts = new HashMap<>();
+    private static final Map<NamespacedKey, Keybinds> keybindsRegistry = new ConcurrentHashMap<>();
+    private static final Map<NamespacedKey, Keybind> keybindRegistry = new ConcurrentHashMap<>();
+    private static final Map<NamespacedKey, Action> actionRegistry = new ConcurrentHashMap<>();
+    private static final Map<NamespacedKey, List<KeybindsScript>> keybindsScripts = new ConcurrentHashMap<>();
     private final NamespacedKey key;
     private ActionResult defaultActionResult = ActionResult.of(MultiActionHandle.CONTINUE, false);
 
@@ -142,11 +145,8 @@ public @Data class Keybinds implements ChestMenu.MenuClickHandler, Keyed {
                     Keybinds keybinds = script.getKeybinds();
                     if (keybinds == null) continue;
 
-                    if (!keybindsScripts.containsKey(keybinds.getKey())) {
-                        keybindsScripts.put(keybinds.getKey(), new ArrayList<>());
-                    }
-
-                    keybindsScripts.get(keybinds.getKey()).add(script);
+                    keybindsScripts.computeIfAbsent(keybinds.getKey(), ignored -> new CopyOnWriteArrayList<>())
+                        .add(script);
                 }
             }
         } catch (Exception e) {
@@ -463,8 +463,10 @@ public @Data class Keybinds implements ChestMenu.MenuClickHandler, Keyed {
             p.closeInventory();
             p.sendMessage(Lang.getString("messages.keybind.scripts.upload"));
             ChatUtils.awaitInput(p, name -> {
-                upload(location, player, name);
-                openScriptsMenu(location, p, page);
+                FoliaSupport.runPlayer(p, () -> {
+                    upload(location, player, name);
+                    openScriptsMenu(location, p, page);
+                });
             });
             return false;
         });

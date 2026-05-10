@@ -14,9 +14,10 @@ import com.github.houbb.pinyin.util.PinyinHelper;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.implementation.machines.networks.advanced.SmartNetworkCraftingGridNewStyle;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
-import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.Networks;
+import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.GridItemRequest;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -33,8 +34,8 @@ import io.github.thebusybiscuit.slimefun4.api.recipes.RecipeType;
 import me.mrCookieSlime.CSCoreLibPlugin.general.Inventory.ClickAction;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenu;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenuPreset;
-import net.guizhanss.guizhanlib.minecraft.helper.inventory.ItemStackHelper;
 import org.bukkit.Bukkit;
+import net.guizhanss.guizhanlib.minecraft.helper.inventory.ItemStackHelper;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -140,15 +141,14 @@ public abstract class AbstractGridNewStyle extends AbstractGrid implements Keybi
         }
 
         HashMap<Integer, ItemStack> remnant = InventoryUtil.addItem(player, requestingStack);
-        remnant.values().stream().findFirst().ifPresent(r2 -> Bukkit.getScheduler().runTask(
-            Networks.getInstance(), () -> {
-                if (player.getWorld().getNearbyEntities(player.getLocation(), 5, 5, 5).size() > SmartNetworkCraftingGridNewStyle.THRESHOLD) {
-                    player.getWorld().dropItem(player.getLocation(), r2);
-                } else {
-                    definition.getNode().getRoot().addItemStack(r2);
-                }
+        remnant.values().stream().findFirst().ifPresent(r2 -> FoliaSupport.runPlayer(player, () -> {
+            if (player.getWorld().getNearbyEntities(player.getLocation(), 5, 5, 5).size()
+                > SmartNetworkCraftingGridNewStyle.THRESHOLD) {
+                player.getWorld().dropItem(player.getLocation(), r2);
+            } else {
+                definition.getNode().getRoot().addItemStack(r2);
             }
-        ));
+        }));
     }
 
     @Override
@@ -238,9 +238,6 @@ public abstract class AbstractGridNewStyle extends AbstractGrid implements Keybi
             sendFeedback(location, FeedbackType.NO_NETWORK_FOUND);
             return;
         }
-
-        // Update Screen
-        Bukkit.getScheduler().runTaskAsynchronously(Networks.getInstance(), () -> {
 
         final BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
         if (blockMenu == null) {
@@ -391,8 +388,6 @@ public abstract class AbstractGridNewStyle extends AbstractGrid implements Keybi
         );
 
         sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-
-        });
     }
 
     @Override

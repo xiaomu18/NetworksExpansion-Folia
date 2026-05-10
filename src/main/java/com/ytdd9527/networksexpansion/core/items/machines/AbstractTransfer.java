@@ -32,14 +32,14 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
 public abstract class AbstractTransfer extends AdvancedDirectional implements RecipeDisplayItem {
-    private static final Map<Location, Integer> PUSH_TICKER_MAP = new HashMap<>();
-    private static final Map<Location, Integer> GRAB_TICKER_MAP = new HashMap<>();
+    private static final Map<Location, Integer> PUSH_TICKER_MAP = new ConcurrentHashMap<>();
+    private static final Map<Location, Integer> GRAB_TICKER_MAP = new ConcurrentHashMap<>();
     private final TransferConfiguration config;
 
     protected AbstractTransfer(

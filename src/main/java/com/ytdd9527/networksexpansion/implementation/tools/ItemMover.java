@@ -7,6 +7,7 @@ import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItemStacks;
 import com.ytdd9527.networksexpansion.implementation.machines.unit.NetworksDrawer;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.mooy1.infinityexpansion.items.storage.StorageCache;
 import io.github.mooy1.infinityexpansion.items.storage.StorageUnit;
 import io.github.sefiraat.networks.managers.SupportedPluginManager;
@@ -60,6 +61,10 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
         ? ExpansionItemStacks.ITEM_MOVER.getItemMeta().getLore()
         : new ArrayList<>());
 
+    private static boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
+    }
+
     public ItemMover(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -94,6 +99,11 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
                     return;
                 }
                 final Location location = optional.get().getLocation();
+                if (!canDirectlyAccess(location)) {
+                    player.sendMessage("§cFolia 下无法直接操作另一个 region 中的存储");
+                    e.cancel();
+                    return;
+                }
                 if (hasPermission(player, location)) {
                     if (!player.isSneaking()) {
                         // Right-click
@@ -264,6 +274,10 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
 
     @Nullable
     public static BarrelIdentity getBarrel(@NotNull Player player, @NotNull Location location) {
+        if (!canDirectlyAccess(location)) {
+            player.sendMessage("§cFolia 下无法直接访问另一个 region 中的存储");
+            return null;
+        }
         final SlimefunItem sfitem = StorageCacheUtils.getSfItem(location);
 
         if (sfitem == null) {
@@ -458,6 +472,9 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
     }
 
     public static boolean hasPermission(@NotNull Player player, @NotNull Location location) {
+        if (!canDirectlyAccess(location)) {
+            return false;
+        }
         for (Interaction interaction : CHECK_INTERACTIONS) {
             if (!Slimefun.getProtectionManager().hasPermission(player, location, interaction)) {
                 return false;

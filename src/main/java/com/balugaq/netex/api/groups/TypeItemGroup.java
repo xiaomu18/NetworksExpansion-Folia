@@ -3,6 +3,7 @@ package com.balugaq.netex.api.groups;
 import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.utils.GuideUtil;
 import com.balugaq.netex.utils.Lang;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.itemstacks.ItemStackUtil;
 import com.ytdd9527.networksexpansion.utils.registry.RecipeTypeRegistry;
 import io.github.sefiraat.networks.Networks;
@@ -191,10 +192,9 @@ public class TypeItemGroup extends FlexItemGroup {
                         RecipeItemGroup recipeItemGroup = RecipeItemGroup.getByItemStack(
                             player, playerProfile, slimefunGuideMode, slimefunItem.getItem());
                         if (recipeItemGroup != null) {
-                            Bukkit.getScheduler()
-                                .runTask(
-                                    JAVA_PLUGIN,
-                                    () -> recipeItemGroup.open(player, playerProfile, slimefunGuideMode));
+                            FoliaSupport.runPlayer(
+                                player,
+                                () -> recipeItemGroup.open(player, playerProfile, slimefunGuideMode));
                         }
                         return false;
                     });

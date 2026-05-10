@@ -15,12 +15,12 @@ import org.jetbrains.annotations.Nullable;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @UtilityClass
 public class MapUtil {
-    public static final Map<String, MapView> MAP_VIEWS = new HashMap<>();
+    public static final Map<String, MapView> MAP_VIEWS = new ConcurrentHashMap<>();
 
     public static @NotNull Pair<ItemStack, MapView> getImageItem(@NotNull String imagePath) {
         ItemStack map = new ItemStack(Material.FILLED_MAP);

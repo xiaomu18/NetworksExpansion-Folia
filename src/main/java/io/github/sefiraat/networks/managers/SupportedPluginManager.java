@@ -2,6 +2,7 @@ package io.github.sefiraat.networks.managers;
 
 import com.bgsoftware.wildstacker.api.WildStackerAPI;
 import com.google.common.base.Preconditions;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import dev.rosewood.rosestacker.api.RoseStackerAPI;
 import io.github.sefiraat.networks.Networks;
 import lombok.Getter;
@@ -50,10 +51,7 @@ public class SupportedPluginManager {
         this.guguSlimefunLib = Bukkit.getPluginManager().isPluginEnabled("GuguSlimefunLib");
         this.finalTECH = Bukkit.getPluginManager().isPluginEnabled("FinalTECH") || Bukkit.getPluginManager().isPluginEnabled("FinalTECH-Changed");
 
-        Networks.getInstance()
-            .getServer()
-            .getScheduler()
-            .runTaskLater(Networks.getInstance(), this::firstTickRegistrations, 1);
+        FoliaSupport.runGlobalDelayed(1L, this::firstTickRegistrations);
     }
 
     public static int getStackAmount(@NotNull Item item) {

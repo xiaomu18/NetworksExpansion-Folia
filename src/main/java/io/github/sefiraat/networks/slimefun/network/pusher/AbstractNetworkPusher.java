@@ -66,8 +66,12 @@ public abstract class AbstractNetworkPusher extends NetworkDirectional implement
         }
 
         final BlockFace direction = getCurrentDirection(blockMenu);
-        final BlockMenu targetMenu = StorageCacheUtils.getMenu(
-            blockMenu.getBlock().getRelative(direction).getLocation());
+        final Block targetBlock = blockMenu.getBlock().getRelative(direction);
+        if (!canDirectlyAccess(targetBlock.getLocation())) {
+            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
+            return;
+        }
+        final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetBlock.getLocation());
 
         if (targetMenu == null) {
             sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);

@@ -40,6 +40,7 @@ public class InfinityBarrel extends BarrelIdentity {
     @Nullable
     @Override
     public ItemStack requestItem(@NotNull ItemRequest itemRequest) {
+        requireDirectAccess();
         BlockMenu blockMenu = StorageCacheUtils.getMenu(this.getLocation());
         return blockMenu == null ? null : blockMenu.getItemInSlot(this.getOutputSlot()[0]);
     }
@@ -72,6 +73,7 @@ public class InfinityBarrel extends BarrelIdentity {
 
     @Override
     public void depositItemStack(ItemStack[] itemsToDeposit) {
+        requireDirectAccess();
         cache.depositAll(itemsToDeposit, true);
     }
 

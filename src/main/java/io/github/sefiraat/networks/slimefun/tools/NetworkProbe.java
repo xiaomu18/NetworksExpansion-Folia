@@ -5,6 +5,7 @@ import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItemStacks;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.slimefun.NetworksSlimefunItemStacks;
 import io.github.sefiraat.networks.slimefun.network.NetworkController;
@@ -31,6 +32,10 @@ public class NetworkProbe extends SpecialSlimefunItem implements CanCooldown {
 
     public static final String SPACES = " ".repeat(32);
     private static final MessageFormat MESSAGE_FORMAT = new MessageFormat("{0}{1}: {2}{3}", Locale.ROOT);
+
+    private static boolean canDirectlyAccess(@NotNull Block block) {
+        return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
+    }
 
     public NetworkProbe(
         @NotNull ItemGroup itemGroup,
@@ -220,6 +225,11 @@ public class NetworkProbe extends SpecialSlimefunItem implements CanCooldown {
         if (optional.isPresent()) {
             final Block block = optional.get();
             final Player player = e.getPlayer();
+            if (!canDirectlyAccess(block)) {
+                player.sendMessage("§cFolia 下无法直接探测另一个 region 中的控制器");
+                e.cancel();
+                return;
+            }
             if (canBeUsed(player, e.getItem())) {
                 SlimefunBlockData blockData = StorageCacheUtils.getBlock(block.getLocation());
                 if (blockData == null) {

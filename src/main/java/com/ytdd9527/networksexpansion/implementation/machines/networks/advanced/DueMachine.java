@@ -127,7 +127,7 @@ public class DueMachine extends SpecialSlimefunItem implements AdminDebuggable {
         addItemHandler(new BlockTicker() {
             @Override
             public boolean isSynchronized() {
-                return false;
+                return true;
             }
 
             @Override

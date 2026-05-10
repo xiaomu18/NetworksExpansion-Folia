@@ -5,6 +5,7 @@ import com.balugaq.netex.utils.Lang;
 import com.balugaq.netex.utils.LocationUtil;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.slimefun.network.NetworkObject;
@@ -23,6 +24,10 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Optional;
 
 public class StatusViewer extends SpecialSlimefunItem {
+    private static boolean canDirectlyAccess(@NotNull Block block) {
+        return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
+    }
+
     public StatusViewer(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -41,6 +46,11 @@ public class StatusViewer extends SpecialSlimefunItem {
         if (optional.isPresent()) {
             final Block block = optional.get();
             final Player player = e.getPlayer();
+            if (!canDirectlyAccess(block)) {
+                player.sendMessage("§cFolia 下无法直接查看另一个 region 中的方块状态");
+                e.cancel();
+                return;
+            }
             final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
             final Location location = block.getLocation();
             if (slimefunItem != null) {

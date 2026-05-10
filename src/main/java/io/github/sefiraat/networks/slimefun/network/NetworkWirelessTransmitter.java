@@ -5,6 +5,7 @@ import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.utils.BlockMenuUtil;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NodeDefinition;
 import io.github.sefiraat.networks.network.NodeType;
@@ -29,8 +30,8 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class NetworkWirelessTransmitter extends NetworkObject {
 
@@ -48,7 +49,7 @@ public class NetworkWirelessTransmitter extends NetworkObject {
     private static final int REQUIRED_POWER = 500;
     private static final int TICKS_PER = 2;
 
-    private final Map<Location, Location> linkedLocations = new HashMap<>();
+    private final Map<Location, Location> linkedLocations = new ConcurrentHashMap<>();
 
     public NetworkWirelessTransmitter(
         @NotNull ItemGroup itemGroup,
@@ -59,12 +60,12 @@ public class NetworkWirelessTransmitter extends NetworkObject {
         this.getSlotsToDrop().add(TEMPLATE_SLOT);
 
         addItemHandler(new BlockTicker() {
-            private final Map<Location, Integer> tickMap = new HashMap<>();
-            private final Map<Location, Boolean> firstTick = new HashMap<>();
+            private final Map<Location, Integer> tickMap = new ConcurrentHashMap<>();
+            private final Map<Location, Boolean> firstTick = new ConcurrentHashMap<>();
 
             @Override
             public boolean isSynchronized() {
-                return false;
+                return runSync();
             }
 
             @Override
@@ -103,6 +104,10 @@ public class NetworkWirelessTransmitter extends NetworkObject {
         });
     }
 
+    private boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
+    }
+
     private void onTick(@NotNull BlockMenu blockMenu) {
         final NodeDefinition definition = NetworkStorage.getNode(blockMenu.getLocation());
 
@@ -115,6 +120,11 @@ public class NetworkWirelessTransmitter extends NetworkObject {
         final Location linkedLocation = linkedLocations.get(location);
 
         if (linkedLocation == null) {
+            sendFeedback(location, FeedbackType.NO_LINKED_LOCATION_FOUND);
+            return;
+        }
+
+        if (!canDirectlyAccess(linkedLocation)) {
             sendFeedback(location, FeedbackType.NO_LINKED_LOCATION_FOUND);
             return;
         }

@@ -79,6 +79,10 @@ public class NetworkVanillaPusher extends NetworkDirectional implements SoftCell
         final BlockFace direction = getCurrentDirection(blockMenu);
         final Block block = blockMenu.getBlock();
         final Block targetBlock = blockMenu.getBlock().getRelative(direction);
+        if (!canDirectlyAccess(targetBlock.getLocation())) {
+            sendFeedback(block.getLocation(), FeedbackType.NO_TARGET_BLOCK);
+            return;
+        }
         // Fix for early vanilla pusher release
         /* Netex - #293
         // No longer check permission

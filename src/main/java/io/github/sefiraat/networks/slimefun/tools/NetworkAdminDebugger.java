@@ -3,6 +3,7 @@ package io.github.sefiraat.networks.slimefun.tools;
 import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.slimefun.network.AdminDebuggable;
 import io.github.thebusybiscuit.slimefun4.api.events.PlayerRightClickEvent;
 import io.github.thebusybiscuit.slimefun4.api.items.ItemGroup;
@@ -18,6 +19,9 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Optional;
 
 public class NetworkAdminDebugger extends SpecialSlimefunItem {
+    private static boolean canDirectlyAccess(@NotNull Block block) {
+        return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
+    }
 
     public NetworkAdminDebugger(
         @NotNull ItemGroup itemGroup,
@@ -37,6 +41,11 @@ public class NetworkAdminDebugger extends SpecialSlimefunItem {
         if (optional.isPresent()) {
             final Block block = optional.get();
             final Player player = e.getPlayer();
+            if (!canDirectlyAccess(block)) {
+                player.sendMessage("§cFolia 下无法直接调试另一个 region 中的方块");
+                e.cancel();
+                return;
+            }
             final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
             if (!player.isOp()) {
                 player.sendMessage(Lang.getString("messages.unsupported-operation.debugger.player_is_not_op"));

@@ -50,6 +50,10 @@ public class NetworkPowerOutlet extends NetworkDirectional {
 
         final BlockFace blockFace = getCurrentDirection(menu);
         final Block targetBlock = b.getRelative(blockFace);
+        if (!canDirectlyAccess(targetBlock.getLocation())) {
+            sendFeedback(menu.getLocation(), FeedbackType.INVALID_BLOCK);
+            return;
+        }
 
         SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetBlock.getLocation());
         if (blockData == null) {

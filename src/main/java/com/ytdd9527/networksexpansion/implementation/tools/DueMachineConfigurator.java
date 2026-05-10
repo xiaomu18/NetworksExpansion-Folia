@@ -5,6 +5,7 @@ import com.jeff_media.morepersistentdatatypes.DataType;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
 import com.ytdd9527.networksexpansion.implementation.machines.networks.advanced.DueMachine;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.utils.Keys;
 import io.github.sefiraat.networks.utils.StackUtils;
 import io.github.sefiraat.networks.utils.datatypes.DataTypeMethods;
@@ -28,6 +29,10 @@ import java.util.Optional;
 
 @SuppressWarnings("DuplicatedCode")
 public class DueMachineConfigurator extends SpecialSlimefunItem {
+    private static boolean canDirectlyAccess(@NotNull Block block) {
+        return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
+    }
+
     public DueMachineConfigurator(
         @NotNull ItemGroup itemGroup,
         @NotNull SlimefunItemStack item,
@@ -39,6 +44,11 @@ public class DueMachineConfigurator extends SpecialSlimefunItem {
             final Optional<Block> optional = e.getClickedBlock();
             if (optional.isPresent()) {
                 final Block block = optional.get();
+                if (!canDirectlyAccess(block)) {
+                    player.sendMessage("§cFolia 下无法直接配置另一个 region 中的方块");
+                    e.cancel();
+                    return;
+                }
                 final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
 
                 if (Slimefun.getProtectionManager().hasPermission(player, block, Interaction.INTERACT_BLOCK)) {

@@ -23,6 +23,7 @@ public class NetworkStorage extends BarrelIdentity {
     @Override
     @Nullable
     public ItemStack requestItem(@NotNull ItemRequest itemRequest) {
+        requireDirectAccess();
         final BlockMenu blockMenu = StorageCacheUtils.getMenu(this.getLocation());
 
         if (blockMenu == null) {
@@ -40,6 +41,7 @@ public class NetworkStorage extends BarrelIdentity {
 
     @Override
     public void depositItemStack(ItemStack @NotNull [] itemsToDeposit) {
+        requireDirectAccess();
         if (StorageCacheUtils.getSfItem(this.getLocation()) instanceof NetworkQuantumStorage) {
             final BlockMenu blockMenu = StorageCacheUtils.getMenu(this.getLocation());
             if (blockMenu == null) {

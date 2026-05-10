@@ -3,6 +3,7 @@ package io.github.sefiraat.networks.slimefun.tools;
 import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.slimefun.network.NetworkController;
 import io.github.thebusybiscuit.slimefun4.api.items.ItemGroup;
 import io.github.thebusybiscuit.slimefun4.api.items.SlimefunItem;
@@ -17,6 +18,9 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Optional;
 
 public class NetworkCrayon extends SpecialSlimefunItem {
+    private static boolean canDirectlyAccess(@NotNull Block block) {
+        return block.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(block.getLocation());
+    }
 
     public NetworkCrayon(
         @NotNull ItemGroup itemGroup,
@@ -29,6 +33,11 @@ public class NetworkCrayon extends SpecialSlimefunItem {
             if (optional.isPresent()) {
                 final Block block = optional.get();
                 final Player player = e.getPlayer();
+                if (!canDirectlyAccess(block)) {
+                    player.sendMessage("§cFolia 下无法直接操作另一个 region 中的控制器");
+                    e.cancel();
+                    return;
+                }
                 final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(block.getLocation());
                 if (slimefunItem instanceof NetworkController) {
                     toggleCrayon(block, player);

@@ -7,6 +7,7 @@ import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.slimefun.network.AdminDebuggable;
 import io.github.thebusybiscuit.slimefun4.api.items.ItemGroup;
 import io.github.thebusybiscuit.slimefun4.api.items.SlimefunItem;
@@ -37,10 +38,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Offsetter extends SpecialSlimefunItem implements AdminDebuggable {
-    private static final Map<Location, TransportFacing> facingMap = new HashMap<>();
-    private static final Map<Location, Integer> offsetMap = new HashMap<>();
+    private static final Map<Location, TransportFacing> facingMap = new ConcurrentHashMap<>();
+    private static final Map<Location, Integer> offsetMap = new ConcurrentHashMap<>();
     private static final String BS_OFFSET = "offset";
     private static final int OFFSET_DECREASE_SLOT = 3;
     private static final int OFFSET_SHOW_SLOT = 4;
@@ -52,6 +54,10 @@ public class Offsetter extends SpecialSlimefunItem implements AdminDebuggable {
         @NotNull RecipeType recipeType,
         @NotNull ItemStack @NotNull [] recipe) {
         super(itemGroup, item, recipeType, recipe);
+    }
+
+    private static boolean canDirectlyAccess(@NotNull Location location) {
+        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
     private static void onTick(@NotNull Block block) {
@@ -107,6 +113,9 @@ public class Offsetter extends SpecialSlimefunItem implements AdminDebuggable {
         final Block toBlock = block.getRelative(to);
         final Location fromLocation = fromBlock.getLocation();
         final Location toLocation = toBlock.getLocation();
+        if (!canDirectlyAccess(fromLocation) || !canDirectlyAccess(toLocation)) {
+            return;
+        }
 
         final BlockMenu fromMenu = StorageCacheUtils.getMenu(fromLocation);
         final BlockMenu toMenu = StorageCacheUtils.getMenu(toLocation);
@@ -214,7 +223,7 @@ public class Offsetter extends SpecialSlimefunItem implements AdminDebuggable {
         addItemHandler(new BlockTicker() {
             @Override
             public boolean isSynchronized() {
-                return false;
+                return true;
             }
 
             @Override

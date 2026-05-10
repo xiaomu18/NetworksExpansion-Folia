@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -50,8 +51,8 @@ import java.util.stream.Collectors;
 
 @SuppressWarnings("DuplicatedCode")
 public class LocalizationService {
-    public static final Set<String> noticed = new HashSet<>();
-    private static final Map<String, String> CACHE = new HashMap<>();
+    public static final Set<String> noticed = ConcurrentHashMap.newKeySet();
+    private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
     private static final String KEY_NAME = ".name";
     private static final String KEY_LORE = ".lore";
     private static final String MSG_KEY_NULL = "key cannot be null";

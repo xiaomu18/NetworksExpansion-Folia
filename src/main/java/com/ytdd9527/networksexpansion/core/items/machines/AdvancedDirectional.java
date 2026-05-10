@@ -7,6 +7,7 @@ import com.balugaq.netex.utils.Lang;
 import com.balugaq.netex.utils.NetworksVersionedEnchantment;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
 import com.ytdd9527.networksexpansion.utils.itemstacks.ItemStackUtil;
 import io.github.sefiraat.networks.NetworkStorage;
@@ -44,10 +45,10 @@ import org.jetbrains.annotations.Range;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
 public abstract class AdvancedDirectional extends NetworkDirectional {
@@ -64,9 +65,9 @@ public abstract class AdvancedDirectional extends NetworkDirectional {
     private static final int DOWN_SLOT = 33;
     private static final Set<BlockFace> VALID_FACES =
         EnumSet.of(BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST);
-    private static final Map<Location, BlockFace> SELECTED_DIRECTION_MAP = new HashMap<>();
-    protected static final Map<Location, Integer> NETWORK_LIMIT_QUANTITY_MAP = new HashMap<>();
-    private static final Map<Location, TransportMode> NETWORK_TRANSPORT_MODE_MAP = new HashMap<>();
+    private static final Map<Location, BlockFace> SELECTED_DIRECTION_MAP = new ConcurrentHashMap<>();
+    protected static final Map<Location, Integer> NETWORK_LIMIT_QUANTITY_MAP = new ConcurrentHashMap<>();
+    private static final Map<Location, TransportMode> NETWORK_TRANSPORT_MODE_MAP = new ConcurrentHashMap<>();
     final NetworkDirectional instance = this;
     private final @NotNull ItemStack CARGO_NUMBER_ICON_CLONE;
     private final @NotNull ItemStack TRANSPORT_MODE_ICON_CLONE;
@@ -369,22 +370,24 @@ public abstract class AdvancedDirectional extends NetworkDirectional {
                     blockMenu.addMenuClickHandler(getCargoNumberSlot(), (player, i, itemStack, clickAction) -> {
                         player.sendMessage(ChatColors.color("&e输入数量"));
                         ChatUtils.awaitInput(player, input -> {
-                            try {
-                                int value = Calculator.calculate(input).intValue();
-                                if (value <= 0 || value > getMaxLimit()) {
-                                    player.sendMessage("请输入 1 ~ " + getMaxLimit() + " 之间的正整数");
+                            FoliaSupport.runPlayer(player, () -> {
+                                try {
+                                    int value = Calculator.calculate(input).intValue();
+                                    if (value <= 0 || value > getMaxLimit()) {
+                                        player.sendMessage("请输入 1 ~ " + getMaxLimit() + " 之间的正整数");
+                                        BlockMenu menu = StorageCacheUtils.getMenu(location);
+                                        if (menu != null) menu.open(player);
+                                        return;
+                                    }
+
+                                    setLimitQuantity(location, value);
+                                    updateShowIcon(location);
                                     BlockMenu menu = StorageCacheUtils.getMenu(location);
                                     if (menu != null) menu.open(player);
-                                    return;
+                                } catch (NumberFormatException e) {
+                                    player.sendMessage(e.getMessage());
                                 }
-
-                                setLimitQuantity(location, value);
-                                updateShowIcon(location);
-                                BlockMenu menu = StorageCacheUtils.getMenu(location);
-                                if (menu != null) menu.open(player);
-                            } catch (NumberFormatException e) {
-                                player.sendMessage(e.getMessage());
-                            }
+                            });
                         });
                         return false;
                     });

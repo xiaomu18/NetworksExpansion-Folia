@@ -43,7 +43,7 @@ public class NetworkWirelessReceiver extends NetworkObject {
         addItemHandler(new BlockTicker() {
             @Override
             public boolean isSynchronized() {
-                return false;
+                return runSync();
             }
 
             @Override

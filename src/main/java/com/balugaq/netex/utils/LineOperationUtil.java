@@ -4,6 +4,7 @@ import com.balugaq.netex.api.data.VanillaInventoryWrapper;
 import com.balugaq.netex.api.enums.TransportMode;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.stackcaches.ItemRequest;
 import io.github.sefiraat.networks.slimefun.network.NetworkObject;
@@ -54,6 +55,7 @@ public class LineOperationUtil {
         boolean skipNoMenu,
         boolean optimizeExperience,
         @NotNull Consumer<BlockMenu> consumer) {
+        requireRegionOwnership(startLocation);
         Location location = startLocation.clone();
         int finalLimit = limit;
         if (optimizeExperience) {
@@ -68,6 +70,7 @@ public class LineOperationUtil {
                 case UP -> location.setY(location.getY() + 1);
                 case DOWN -> location.setY(location.getY() - 1);
             }
+            requireRegionOwnership(location);
             final BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
             if (blockMenu == null) {
                 if (skipNoMenu) {
@@ -104,6 +107,7 @@ public class LineOperationUtil {
         boolean skipNoInventory,
         boolean optimizeExperience,
         @NotNull Consumer<BlockMenu> consumer) {
+        requireRegionOwnership(startLocation);
         Location location = startLocation.clone();
         int finalLimit = limit;
         if (optimizeExperience) {
@@ -118,6 +122,7 @@ public class LineOperationUtil {
                 case UP -> location.setY(location.getY() + 1);
                 case DOWN -> location.setY(location.getY() - 1);
             }
+            requireRegionOwnership(location);
             BlockState state = location.getBlock().getState(false);
             if (state instanceof InventoryHolder holder) {
                 Inventory inv = holder.getInventory();
@@ -159,6 +164,7 @@ public class LineOperationUtil {
         boolean allowNoMenu,
         boolean optimizeExperience,
         @NotNull Consumer<Location> consumer) {
+        requireRegionOwnership(startLocation);
         Location location = startLocation.clone();
         int finalLimit = limit;
         if (optimizeExperience) {
@@ -173,6 +179,7 @@ public class LineOperationUtil {
                 case UP -> location.setY(location.getY() + 1);
                 case DOWN -> location.setY(location.getY() - 1);
             }
+            requireRegionOwnership(location);
             final BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
             if (blockMenu == null) {
                 if (!allowNoMenu) {
@@ -674,6 +681,7 @@ public class LineOperationUtil {
     }
 
     public static void outPower(@NotNull Location location, @NotNull NetworkRoot root, int rate) {
+        requireRegionOwnership(location);
         final SlimefunBlockData blockData = StorageCacheUtils.getBlock(location);
         if (blockData == null) {
             return;
@@ -709,5 +717,11 @@ public class LineOperationUtil {
 
         component.addCharge(location, gen);
         root.removeRootPower(gen);
+    }
+
+    private static void requireRegionOwnership(@NotNull Location location) {
+        if (location.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(location)) {
+            throw new IllegalStateException("Cross-region line operation at " + location);
+        }
     }
 }

@@ -8,6 +8,7 @@ import com.balugaq.netex.utils.MapUtil;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.implementation.ExpansionItems;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.network.NetworkRoot;
@@ -42,15 +43,15 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("DuplicatedCode")
 public class HangingGridNewStyle extends NetworkGridNewStyle implements HangingBlock, Placeable {
     public static final String layer = "/textures/layer/terminal.png";
-    public static final Map<Location, BlockMenu> menus = new HashMap<>();
+    public static final Map<Location, BlockMenu> menus = new ConcurrentHashMap<>();
     public @Nullable BlockMenuPreset preset = null;
 
     public HangingGridNewStyle(
@@ -93,7 +94,7 @@ public class HangingGridNewStyle extends NetworkGridNewStyle implements HangingB
         if (event.getAction() == PlayerItemFrameChangeEvent.ItemFrameChangeAction.ROTATE) {
             Location fixed = getFixedLocation(attachon, event.getItemFrame().getAttachedFace());
             BlockMenu menu = getOrCreateMenu(fixed);
-            menu.open(event.getPlayer());
+            FoliaSupport.runPlayer(event.getPlayer(), () -> menu.open(event.getPlayer()));
         } else if (event.getAction() == PlayerItemFrameChangeEvent.ItemFrameChangeAction.REMOVE) {
             breakBlock(attachon, event.getItemFrame());
         }
@@ -312,19 +313,21 @@ public class HangingGridNewStyle extends NetworkGridNewStyle implements HangingB
                 if (s.isBlank()) {
                     return;
                 }
-                s = s.toLowerCase(Locale.ROOT);
-                gridCache.setFilter(s);
-                getCacheMap().put(blockMenu.getLocation(), gridCache);
-                player.sendMessage(Lang.getString("messages.completed-operation.grid.filter_set"));
+                final String normalized = s.toLowerCase(Locale.ROOT);
+                FoliaSupport.runPlayer(player, () -> {
+                    gridCache.setFilter(normalized);
+                    getCacheMap().put(blockMenu.getLocation(), gridCache);
+                    player.sendMessage(Lang.getString("messages.completed-operation.grid.filter_set"));
 
-                SlimefunBlockData data = StorageCacheUtils.getBlock(attachon);
-                if (data == null) {
-                    return;
-                }
+                    SlimefunBlockData data = StorageCacheUtils.getBlock(attachon);
+                    if (data == null) {
+                        return;
+                    }
 
-                data.setData(fixedKey(BS_FILTER_KEY, attachSide), s);
-                updateDisplay(blockMenu, attachon, attachSide);
-                blockMenu.open(player);
+                    data.setData(fixedKey(BS_FILTER_KEY, attachSide), normalized);
+                    updateDisplay(blockMenu, attachon, attachSide);
+                    FoliaSupport.runPlayer(player, () -> blockMenu.open(player));
+                });
             });
         }
     }

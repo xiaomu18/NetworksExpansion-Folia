@@ -9,9 +9,10 @@ import com.github.houbb.pinyin.constant.enums.PinyinStyleEnum;
 import com.github.houbb.pinyin.util.PinyinHelper;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.TextUtil;
-import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.Networks;
+import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.GridItemRequest;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -32,7 +33,6 @@ import me.mrCookieSlime.Slimefun.Objects.handlers.BlockTicker;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenu;
 import me.mrCookieSlime.Slimefun.api.inventory.BlockMenuPreset;
 import net.guizhanss.guizhanlib.minecraft.helper.inventory.ItemStackHelper;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"DuplicatedCode", "deprecation"})
 public abstract class AbstractGrid extends NetworkObject {
@@ -91,16 +92,17 @@ public abstract class AbstractGrid extends NetworkObject {
         addItemSetting(this.tickRate);
 
         addItemHandler(new BlockTicker() {
-
-            private int tick = 1;
+            private final Map<Location, Integer> tickMap = new ConcurrentHashMap<>();
 
             @Override
             public boolean isSynchronized() {
-                return false;
+                return runSync();
             }
 
             @Override
             public void tick(@NotNull Block block, SlimefunItem item, @NotNull SlimefunBlockData data) {
+                final Location location = block.getLocation();
+                final int tick = tickMap.getOrDefault(location, 1);
                 if (tick <= 1) {
                     final BlockMenu blockMenu = data.getBlockMenu();
                     if (blockMenu == null) {
@@ -108,15 +110,11 @@ public abstract class AbstractGrid extends NetworkObject {
                     }
                     addToRegistry(block);
                     tryAddItem(blockMenu);
-                    GridCache cache = getCacheMap().get(block.getLocation());
+                    GridCache cache = getCacheMap().get(location);
                     cache.setEntriesCache(null);
                     updateDisplay(blockMenu);
                 }
-            }
-
-            @Override
-            public void uniqueTick() {
-                tick = tick <= 1 ? tickRate.getValue() : tick - 1;
+                tickMap.put(location, tick <= 1 ? tickRate.getValue() : tick - 1);
             }
 
             @Override
@@ -187,9 +185,6 @@ public abstract class AbstractGrid extends NetworkObject {
             sendFeedback(location, FeedbackType.NO_NETWORK_FOUND);
             return;
         }
-
-        // Update Screen
-        Bukkit.getScheduler().runTaskAsynchronously(Networks.getInstance(), () -> {
 
         final BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
         if (blockMenu == null) {
@@ -266,8 +261,6 @@ public abstract class AbstractGrid extends NetworkObject {
             Icon.getPageStack(getPageNextStack(), gridCache.getPage() + 1, gridCache.getMaxPages() + 1));
 
         sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-
-        });
     }
 
     protected void clearDisplay(@NotNull BlockMenu blockMenu) {
@@ -330,26 +323,29 @@ public abstract class AbstractGrid extends NetworkObject {
                         return;
                     }
                     s = s.toLowerCase(Locale.ROOT);
-                    gridCache.setFilter(s);
-                    getCacheMap().put(blockMenu.getLocation(), gridCache);
-                    player.sendMessage(Lang.getString("messages.completed-operation.grid.filter_set"));
+                    final String normalized = s;
+                    FoliaSupport.runPlayer(player, () -> {
+                        gridCache.setFilter(normalized);
+                        getCacheMap().put(blockMenu.getLocation(), gridCache);
+                        player.sendMessage(Lang.getString("messages.completed-operation.grid.filter_set"));
 
-                    SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
-                    if (data == null) {
-                        return;
-                    }
-
-                    if (blockMenu.getPreset().getID().equals(data.getSfId())) {
-                        data.setData(BS_FILTER_KEY, s);
-                        BlockMenu actualMenu = data.getBlockMenu();
-                        if (actualMenu != null) {
-                            actualMenu.open(player);
-                            if (gridCache.getMaxPages() >= 1) {
-                                gridCache.setPage(1);
-                            }
-                            updateDisplay(actualMenu);
+                        SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
+                        if (data == null) {
+                            return;
                         }
-                    }
+
+                        if (blockMenu.getPreset().getID().equals(data.getSfId())) {
+                            data.setData(BS_FILTER_KEY, normalized);
+                            BlockMenu actualMenu = data.getBlockMenu();
+                            if (actualMenu != null) {
+                                actualMenu.open(player);
+                                if (gridCache.getMaxPages() >= 1) {
+                                    gridCache.setPage(1);
+                                }
+                                updateDisplay(actualMenu);
+                            }
+                        }
+                    });
                 }
             );
         }

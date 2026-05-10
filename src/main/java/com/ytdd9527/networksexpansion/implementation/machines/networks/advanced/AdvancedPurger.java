@@ -36,6 +36,8 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class AdvancedPurger extends NetworkObject implements RecipeDisplayItem {
 
@@ -68,16 +70,16 @@ public class AdvancedPurger extends NetworkObject implements RecipeDisplayItem {
         }
         addItemHandler(
             new BlockTicker() {
-
-                private int tick = 1;
+                private final Map<Block, Integer> tickMap = new ConcurrentHashMap<>();
 
                 @Override
                 public boolean isSynchronized() {
-                    return false;
+                    return runSync();
                 }
 
                 @Override
                 public void tick(@NotNull Block block, SlimefunItem item, SlimefunBlockData data) {
+                    final int tick = tickMap.getOrDefault(block, 1);
                     if (tick <= 1) {
                         addToRegistry(block);
                         BlockMenu blockMenu = StorageCacheUtils.getMenu(block.getLocation());
@@ -85,11 +87,7 @@ public class AdvancedPurger extends NetworkObject implements RecipeDisplayItem {
                             tryKillItem(blockMenu);
                         }
                     }
-                }
-
-                @Override
-                public void uniqueTick() {
-                    tick = tick <= 1 ? tickRate.getValue() : tick - 1;
+                    tickMap.put(block, tick <= 1 ? tickRate.getValue() : tick - 1);
                 }
             },
             new BlockBreakHandler(true, true) {

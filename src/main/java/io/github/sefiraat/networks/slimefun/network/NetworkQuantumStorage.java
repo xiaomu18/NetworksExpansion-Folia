@@ -8,6 +8,7 @@ import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
 import com.ytdd9527.networksexpansion.core.items.SpecialSlimefunItem;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import com.ytdd9527.networksexpansion.utils.itemstacks.ItemStackUtil;
 import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.network.stackcaches.ItemStackCache;
@@ -52,9 +53,9 @@ import org.jetbrains.annotations.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"deprecation", "DuplicatedCode"})
 public class NetworkQuantumStorage extends SpecialSlimefunItem implements DistinctiveItem {
@@ -94,7 +95,7 @@ public class NetworkQuantumStorage extends SpecialSlimefunItem implements Distin
     private static final int[] OUTPUT_SLOTS = new int[]{6, 8};
     private static final int[] BACKGROUND_SLOTS = new int[]{9, 10, 11, 12, 14, 15, 16, 17};
 
-    private static final Map<Location, QuantumCache> CACHES = new HashMap<>();
+    private static final Map<Location, QuantumCache> CACHES = new ConcurrentHashMap<>();
 
     static {
         final ItemMeta itemMeta = Icon.QUANTUM_STORAGE_NO_ITEM.getItemMeta();
@@ -301,7 +302,7 @@ public class NetworkQuantumStorage extends SpecialSlimefunItem implements Distin
             new BlockTicker() {
                 @Override
                 public boolean isSynchronized() {
-                    return false;
+                    return true;
                 }
 
                 @Override
@@ -450,23 +451,25 @@ public class NetworkQuantumStorage extends SpecialSlimefunItem implements Distin
                         p.sendMessage(Lang.getString(
                             "messages.normal-operation.quantum_storage.waiting_for_input_custom_max_amount_new"));
                         ChatUtils.awaitInput(p, s -> {
-                            // Catching the error is cleaner than directly validating the string
-                            try {
-                                if (s.isBlank()) {
-                                    return;
-                                }
-                                long newMax = Math.max(1, Math.min(Calculator.calculate(s).longValue(), maxAmount));
-                                if (newMax > MAX_AMOUNT) {
+                            FoliaSupport.runPlayer(p, () -> {
+                                // Catching the error is cleaner than directly validating the string
+                                try {
+                                    if (s.isBlank()) {
+                                        return;
+                                    }
+                                    long newMax = Math.max(1, Math.min(Calculator.calculate(s).longValue(), maxAmount));
+                                    if (newMax > MAX_AMOUNT) {
+                                        p.sendMessage(Lang.getString(
+                                            "messages.unsupported-operation.quantum_storage.invalid_custom_max_amount_new"));
+                                        return;
+                                    }
+                                    setCustomMaxAmount(menu, p, newMax);
+                                } catch (NumberFormatException e) {
                                     p.sendMessage(Lang.getString(
                                         "messages.unsupported-operation.quantum_storage.invalid_custom_max_amount_new"));
-                                    return;
+                                    p.sendMessage(e.getMessage());
                                 }
-                                setCustomMaxAmount(menu, p, newMax);
-                            } catch (NumberFormatException e) {
-                                p.sendMessage(Lang.getString(
-                                    "messages.unsupported-operation.quantum_storage.invalid_custom_max_amount_new"));
-                                p.sendMessage(e.getMessage());
-                            }
+                            });
                         });
                     } else {
                         setItem(menu, p);
