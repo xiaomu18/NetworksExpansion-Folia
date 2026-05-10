@@ -77,14 +77,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 @SuppressWarnings({"deprecation", "DuplicatedCode"})
 public class NetworksMain implements TabExecutor {
     private static final String FOLIA_WORLDEDIT_DISABLED_MESSAGE =
         ChatColor.RED + "Folia builds currently disable /networks worldedit* features.";
-    private static final String FOLIA_CROSS_REGION_BLOCK_MESSAGE =
-        ChatColor.RED + "Folia builds cannot directly inspect or modify a target block in another region.";
 
     @Deprecated
     private static final Set<UUID> requesters = new ConcurrentSkipListSet<>();
@@ -106,15 +105,6 @@ public class NetworksMain implements TabExecutor {
         return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
-    private static boolean ensureDirectBlockAccess(@NotNull Player player, @NotNull Location location) {
-        if (canDirectlyAccess(location)) {
-            return true;
-        }
-
-        player.sendMessage(FOLIA_CROSS_REGION_BLOCK_MESSAGE);
-        return false;
-    }
-
     private static void runAtTargetRegion(@NotNull Location location, @NotNull Runnable runnable) {
         if (canDirectlyAccess(location)) {
             runnable.run();
@@ -125,6 +115,14 @@ public class NetworksMain implements TabExecutor {
 
     private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
         FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
+    private static <T> @Nullable T callAtTargetRegion(@NotNull Location location, @NotNull Supplier<T> supplier) {
+        if (canDirectlyAccess(location)) {
+            return supplier.get();
+        }
+
+        return FoliaSupport.supplyRegion(location, supplier).join();
     }
 
     @Deprecated
@@ -953,7 +951,7 @@ public class NetworksMain implements TabExecutor {
                             sendPlayerMessage(player, "缓存: " + cchName);
                             @SuppressWarnings("unchecked") Map<Location, Integer> locations = (Map<Location, Integer>) value;
                             Map<String, Integer> formatted = locations.entrySet().stream().map(e -> {
-                                SlimefunItem sf = canDirectlyAccess(e.getKey()) ? StorageCacheUtils.getSfItem(e.getKey()) : null;
+                                SlimefunItem sf = callAtTargetRegion(e.getKey(), () -> StorageCacheUtils.getSfItem(e.getKey()));
                                 if (sf == null) {
                                     return Map.entry(e.getKey().toString(), e.getValue());
                                 }

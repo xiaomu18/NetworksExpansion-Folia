@@ -286,8 +286,13 @@ public abstract class AbstractEncoder extends NetworkObject implements CraftType
                 }
                 BlockMenuUtil.pushItem(blockMenu, blueprintClone, OUTPUT_SLOT);
                 sendFeedback(menuLocation, FeedbackType.SUCCESS);
-                root.removeRootPower(CHARGE_COST);
                 return true;
+            }).thenCompose(success -> {
+                if (!Boolean.TRUE.equals(success)) {
+                    return CompletableFuture.completedFuture(false);
+                }
+
+                return root.removeRootPowerAsync(CHARGE_COST).thenApply(ignored -> true);
             }));
         } else {
             player.sendMessage(Lang.getString("messages.unsupported-operation.encoder.output_full"));

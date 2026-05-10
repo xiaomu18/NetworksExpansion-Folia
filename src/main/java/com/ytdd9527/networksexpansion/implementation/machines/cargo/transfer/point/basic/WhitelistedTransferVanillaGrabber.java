@@ -9,6 +9,7 @@ import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.balugaq.netex.api.transfer.TransferConfiguration;
 import com.bgsoftware.wildchests.api.WildChestsAPI;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.network.NetworkRoot;
@@ -86,6 +87,8 @@ public class WhitelistedTransferVanillaGrabber extends NetworkDirectional implem
 
         // dirty fix
         Block targetBlock = block.getRelative(direction);
+        final org.bukkit.Location menuLocation = blockMenu.getLocation();
+        final org.bukkit.Location targetLocation = targetBlock.getLocation();
 
         /* Netex - #293
         // No longer check permission
@@ -101,32 +104,34 @@ public class WhitelistedTransferVanillaGrabber extends NetworkDirectional implem
         }
 
          */
-        // Netex start - #287
-        if (StorageCacheUtils.getMenu(targetBlock.getLocation()) != null) {
-            return;
-        }
-        // Netex end - #287
+        FoliaSupport.runRegion(targetLocation, () -> {
+            // Netex start - #287
+            if (StorageCacheUtils.getMenu(targetLocation) != null) {
+                return;
+            }
+            // Netex end - #287
 
-        final BlockState blockState = PaperLib.getBlockState(targetBlock, false).getState();
+            final BlockState blockState = PaperLib.getBlockState(targetLocation.getBlock(), false).getState();
 
-        if (!(blockState instanceof InventoryHolder holder)) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_INVENTORY_FOUND);
-            return;
-        }
+            if (!(blockState instanceof InventoryHolder holder)) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.NO_INVENTORY_FOUND));
+                return;
+            }
 
-        boolean wildChests = Networks.getSupportedPluginManager().isWildChests();
-        boolean isChest = wildChests && WildChestsAPI.getChest(targetBlock.getLocation()) != null;
+            boolean wildChests = Networks.getSupportedPluginManager().isWildChests();
+            boolean isChest = wildChests && WildChestsAPI.getChest(targetLocation) != null;
 
-        if (wildChests && isChest) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.PROTECTED_BLOCK);
-            return;
-        }
+            if (wildChests && isChest) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.PROTECTED_BLOCK));
+                return;
+            }
 
-        final Inventory inventory = holder.getInventory();
+            final Inventory inventory = holder.getInventory();
 
-        grabInventory(blockMenu, blockState, inventory, root, getClonedTemplateItems(blockMenu));
+            grabInventory(blockMenu, blockState, inventory, root, getClonedTemplateItems(blockMenu));
 
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+            FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.WORKING));
+        });
     }
 
     @Override

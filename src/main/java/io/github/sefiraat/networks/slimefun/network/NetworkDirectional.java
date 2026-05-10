@@ -402,20 +402,19 @@ public abstract class NetworkDirectional extends NetworkObject {
     @ParametersAreNonnullByDefault
     public void openDirection(Player player, BlockMenu blockMenu, BlockFace blockFace) {
         final Location targetLocation = blockMenu.getBlock().getRelative(blockFace).getLocation();
-        if (!canDirectlyAccess(targetLocation)) {
-            return;
-        }
-        final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetLocation);
-        if (targetMenu != null) {
-            final Location location = targetMenu.getLocation();
-            final SlimefunItem item = StorageCacheUtils.getSfItem(location);
-            if (item != null
-                && item.canUse(player, true)
-                && Slimefun.getProtectionManager()
-                .hasPermission(player, blockMenu.getLocation(), Interaction.INTERACT_BLOCK)) {
-                targetMenu.open(player);
+        FoliaSupport.runRegion(targetLocation, () -> {
+            final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetLocation);
+            if (targetMenu != null) {
+                final Location location = targetMenu.getLocation();
+                final SlimefunItem item = StorageCacheUtils.getSfItem(location);
+                if (item != null
+                    && item.canUse(player, true)
+                    && Slimefun.getProtectionManager()
+                    .hasPermission(player, blockMenu.getLocation(), Interaction.INTERACT_BLOCK)) {
+                    FoliaSupport.runPlayer(player, () -> targetMenu.open(player));
+                }
             }
-        }
+        });
     }
 
     @ParametersAreNonnullByDefault

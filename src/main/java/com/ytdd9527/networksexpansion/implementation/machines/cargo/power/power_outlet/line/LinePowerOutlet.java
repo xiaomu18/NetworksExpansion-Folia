@@ -62,12 +62,12 @@ public class LinePowerOutlet extends NetworkDirectional {
 
         final NetworkRoot root = definition.getNode().getRoot();
         final BlockFace blockFace = getCurrentDirection(blockMenu);
-        LineOperationUtil.doEnergyOperation(
+        LineOperationUtil.doEnergyOperationAsync(
             blockMenu.getLocation(),
             blockFace,
             this.maxDistance,
             true,
             false,
-            (location) -> LineOperationUtil.outPower(location, root, this.rate));
+            (location) -> LineOperationUtil.outPowerAsync(location, root, this.rate));
     }
 }

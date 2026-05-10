@@ -33,6 +33,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @SuppressWarnings("DuplicatedCode")
 public class WhitelistedLineTransferGrabber extends NetworkDirectional implements RecipeDisplayItem, SoftCellBannable, WhitelistedGrabber {
@@ -107,14 +108,17 @@ public class WhitelistedLineTransferGrabber extends NetworkDirectional implement
         }
 
         List<ItemStack> templates = getClonedTemplateItems(blockMenu);
-        LineOperationUtil.doOperation(
+        LineOperationUtil.doOperationAsync(
             blockMenu.getLocation(),
             direction,
             config.maxDistance,
             false,
             false,
             (targetMenu) ->
-                grabMenu(blockMenu, targetMenu, root, templates));
+                {
+                    grabMenu(blockMenu, targetMenu, root, templates);
+                    return CompletableFuture.completedFuture(null);
+                });
         sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
     }
 

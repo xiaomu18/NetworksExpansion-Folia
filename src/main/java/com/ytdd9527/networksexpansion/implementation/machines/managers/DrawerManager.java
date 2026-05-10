@@ -57,6 +57,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 @SuppressWarnings("DuplicatedCode")
 public class DrawerManager extends NetworkObject {
@@ -135,14 +136,35 @@ public class DrawerManager extends NetworkObject {
         return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
+    private static void runAtTargetRegion(@NotNull Location location, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(location)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(location, runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
+    private static <T> @Nullable T callAtTargetRegion(@NotNull Location location, @NotNull Supplier<T> supplier) {
+        if (canDirectlyAccess(location)) {
+            return supplier.get();
+        }
+
+        return FoliaSupport.supplyRegion(location, supplier).join();
+    }
+
     public static @Nullable String getStorageName(@NotNull Location dataLocation) {
         return StorageCacheUtils.getData(dataLocation, BS_NAME);
     }
 
     public static void setStorageIcon(
         @NotNull Player player, @NotNull Location dataLocation, @NotNull ItemStack cursor) {
-        StorageCacheUtils.setData(dataLocation, BS_ICON, serializeIcon(cursor));
-        player.sendMessage(Lang.getString("messages.completed-operation.manager.set_icon"));
+        final String serialized = serializeIcon(cursor);
+        runAtTargetRegion(dataLocation, () -> StorageCacheUtils.setData(dataLocation, BS_ICON, serialized));
+        sendPlayerMessage(player, Lang.getString("messages.completed-operation.manager.set_icon"));
     }
 
     public static @Nullable ItemStack getStorageIcon(@NotNull Location dataLocation) {
@@ -179,13 +201,15 @@ public class DrawerManager extends NetworkObject {
     }
 
     public static void topOrUntopStorage(@NotNull Player player, @NotNull Location dataLocation) {
-        if (Objects.equals(StorageCacheUtils.getData(dataLocation, BS_TOP), BS_TOP_1B)) {
-            StorageCacheUtils.setData(dataLocation, BS_TOP, BS_TOP_0B);
-            player.sendMessage(Lang.getString("messages.completed-operation.manager.top_storage_off"));
-        } else {
-            StorageCacheUtils.setData(dataLocation, BS_TOP, BS_TOP_1B);
-            player.sendMessage(Lang.getString("messages.completed-operation.manager.top_storage_on"));
-        }
+        runAtTargetRegion(dataLocation, () -> {
+            if (Objects.equals(StorageCacheUtils.getData(dataLocation, BS_TOP), BS_TOP_1B)) {
+                StorageCacheUtils.setData(dataLocation, BS_TOP, BS_TOP_0B);
+                sendPlayerMessage(player, Lang.getString("messages.completed-operation.manager.top_storage_off"));
+            } else {
+                StorageCacheUtils.setData(dataLocation, BS_TOP, BS_TOP_1B);
+                sendPlayerMessage(player, Lang.getString("messages.completed-operation.manager.top_storage_on"));
+            }
+        });
     }
 
     public static boolean isTopStorage(@NotNull Location dataLocation) {
@@ -194,16 +218,14 @@ public class DrawerManager extends NetworkObject {
     }
 
     public static void openMenu(@NotNull StorageUnitData data, @NotNull Player player) {
-        if (!canDirectlyAccess(data.getLastLocation())) {
-            player.sendMessage(FeedbackType.NO_TARGET_BLOCK.getMessage());
-            return;
-        }
-        BlockMenu menu = StorageCacheUtils.getMenu(data.getLastLocation());
-        if (menu == null) {
-            return;
-        }
+        runAtTargetRegion(data.getLastLocation(), () -> {
+            BlockMenu menu = StorageCacheUtils.getMenu(data.getLastLocation());
+            if (menu == null) {
+                return;
+            }
 
-        FoliaSupport.runPlayer(player, () -> menu.open(player));
+            FoliaSupport.runPlayer(player, () -> menu.open(player));
+        });
     }
 
     @SuppressWarnings("deprecation")
@@ -297,22 +319,28 @@ public class DrawerManager extends NetworkObject {
         player.closeInventory();
         ChatUtils.awaitInput(player, s -> {
             FoliaSupport.runPlayer(player, () -> {
-                StorageCacheUtils.setData(dataLocation, BS_NAME, s);
+                runAtTargetRegion(dataLocation, () -> StorageCacheUtils.setData(dataLocation, BS_NAME, s));
                 player.sendMessage(Lang.getString("messages.completed-operation.manager.set_name"));
-
-                SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
-                if (data == null) {
-                    return;
-                }
-
-                if (blockMenu.getPreset().getID().equals(data.getSfId())) {
-                    BlockMenu actualMenu = data.getBlockMenu();
-                    if (actualMenu != null) {
-                        updateDisplay(actualMenu);
-                        actualMenu.open(player);
-                    }
-                }
+                reopenManagerMenu(blockMenu, player);
             });
+        });
+    }
+
+    private void reopenManagerMenu(@NotNull BlockMenu blockMenu, @NotNull Player player) {
+        final Location managerLocation = blockMenu.getLocation();
+        FoliaSupport.runRegion(managerLocation, () -> {
+            SlimefunBlockData data = StorageCacheUtils.getBlock(managerLocation);
+            if (data == null) {
+                return;
+            }
+
+            if (blockMenu.getPreset().getID().equals(data.getSfId())) {
+                BlockMenu actualMenu = data.getBlockMenu();
+                if (actualMenu != null) {
+                    updateDisplay(actualMenu);
+                    FoliaSupport.runPlayer(player, () -> actualMenu.open(player));
+                }
+            }
         });
     }
 
@@ -393,15 +421,13 @@ public class DrawerManager extends NetworkObject {
                 } else if (!isEmpty) {
                     displayStack = new CustomItemStack(
                         displayStack, TextUtil.GRAY + ItemStackHelper.getDisplayName(dataItemStack));
-                } else if (canDirectlyAccess(dataLocation)) {
-                    SlimefunItem sf = StorageCacheUtils.getSfItem(dataLocation);
+                } else {
+                    SlimefunItem sf = callAtTargetRegion(dataLocation, () -> StorageCacheUtils.getSfItem(dataLocation));
                     if (sf == null) {
-                        displayStack = new CustomItemStack(displayStack, Sorters.NO_ITEM);
+                        displayStack = new CustomItemStack(displayStack == null ? Icon.UNKNOWN_ITEM : displayStack, Sorters.NO_ITEM);
                     } else {
                         displayStack = sf.getItem().clone();
                     }
-                } else {
-                    displayStack = new CustomItemStack(Icon.UNKNOWN_ITEM, Sorters.NO_ITEM);
                 }
 
                 final ItemMeta itemMeta = displayStack.getItemMeta();

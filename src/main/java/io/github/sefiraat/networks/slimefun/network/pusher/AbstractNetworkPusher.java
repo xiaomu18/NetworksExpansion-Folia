@@ -29,6 +29,8 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.ArrayList;
+import java.util.List;
 
 @SuppressWarnings("DuplicatedCode")
 public abstract class AbstractNetworkPusher extends NetworkDirectional implements SoftCellBannable {
@@ -74,17 +76,8 @@ public abstract class AbstractNetworkPusher extends NetworkDirectional implement
 
         final BlockFace direction = getCurrentDirection(blockMenu);
         final Block targetBlock = blockMenu.getBlock().getRelative(direction);
-        if (!canDirectlyAccess(targetBlock.getLocation())) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-        final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetBlock.getLocation());
-
-        if (targetMenu == null) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-
+        final Location targetLocation = targetBlock.getLocation();
+        final List<ItemRequest> requests = new ArrayList<>();
         for (int itemSlot : this.getItemSlots()) {
             final ItemStack testItem = blockMenu.getItemInSlot(itemSlot);
 
@@ -94,45 +87,60 @@ public abstract class AbstractNetworkPusher extends NetworkDirectional implement
 
             final ItemStack clone = testItem.clone();
             clone.setAmount(1);
-            final ItemRequest itemRequest = new ItemRequest(clone, clone.getMaxStackSize());
+            requests.add(new ItemRequest(clone, clone.getMaxStackSize()));
+        }
 
-            int[] slots =
-                targetMenu.getPreset().getSlotsAccessedByItemTransport(targetMenu, ItemTransportFlow.INSERT, clone);
+        if (requests.isEmpty()) {
+            return;
+        }
 
-            for (int slot : slots) {
-                final ItemStack itemStack = targetMenu.getItemInSlot(slot);
-
-                if (itemStack != null && itemStack.getType() != Material.AIR) {
-                    final int space = itemStack.getMaxStackSize() - itemStack.getAmount();
-                    if (space > 0 && StackUtils.itemsMatch(itemRequest, itemStack)) {
-                        itemRequest.setAmount(space);
-                    } else {
-                        continue;
-                    }
-                }
-
-                if (!pendingPushes.add(menuLocation)) {
-                    return;
-                }
-                definition.getNode().getRoot().getItemStack0Async(menuLocation, itemRequest).whenComplete((fetched, throwable) ->
-                    FoliaSupport.runRegion(menuLocation, () -> {
-                        pendingPushes.remove(menuLocation);
-                        if (fetched != null) {
-                            BlockMenuUtil.pushItem(targetMenu, fetched, slots);
-                            sendFeedback(menuLocation, FeedbackType.WORKING);
-                            if (definition.getNode().getRoot().isDisplayParticles()) {
-                                showParticle(menuLocation, direction);
-                            }
-                        } else {
-                            sendFeedback(menuLocation, FeedbackType.NO_ITEM_FOUND);
-                        }
-                    }));
-                break;
-            }
-            if (pendingPushes.contains(menuLocation)) {
+        FoliaSupport.runRegion(targetLocation, () -> {
+            final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetLocation);
+            if (targetMenu == null) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.NO_TARGET_BLOCK));
                 return;
             }
-        }
+
+            for (ItemRequest templateRequest : requests) {
+                final ItemRequest itemRequest = new ItemRequest(templateRequest.getItemStack().clone(), templateRequest.getAmount());
+                final int[] slots =
+                    targetMenu.getPreset().getSlotsAccessedByItemTransport(targetMenu, ItemTransportFlow.INSERT, itemRequest.getItemStack());
+
+                for (int slot : slots) {
+                    final ItemStack itemStack = targetMenu.getItemInSlot(slot);
+
+                    if (itemStack != null && itemStack.getType() != Material.AIR) {
+                        final int space = itemStack.getMaxStackSize() - itemStack.getAmount();
+                        if (space > 0 && StackUtils.itemsMatch(itemRequest, itemStack)) {
+                            itemRequest.setAmount(space);
+                        } else {
+                            continue;
+                        }
+                    }
+
+                    if (!pendingPushes.add(menuLocation)) {
+                        return;
+                    }
+                    definition.getNode().getRoot().getItemStack0Async(menuLocation, itemRequest).whenComplete((fetched, throwable) ->
+                        FoliaSupport.runRegion(targetLocation, () -> {
+                            final BlockMenu liveTargetMenu = StorageCacheUtils.getMenu(targetLocation);
+                            FoliaSupport.runRegion(menuLocation, () -> {
+                                pendingPushes.remove(menuLocation);
+                                if (fetched != null && liveTargetMenu != null) {
+                                    BlockMenuUtil.pushItem(liveTargetMenu, fetched, slots);
+                                    sendFeedback(menuLocation, FeedbackType.WORKING);
+                                    if (definition.getNode().getRoot().isDisplayParticles()) {
+                                        showParticle(menuLocation, direction);
+                                    }
+                                } else {
+                                    sendFeedback(menuLocation, FeedbackType.NO_ITEM_FOUND);
+                                }
+                            });
+                        }));
+                    return;
+                }
+            }
+        });
     }
 
     @Override

@@ -125,39 +125,42 @@ public class SmartGrabber extends SpecialSlimefunItem implements AdminDebuggable
     }
 
     public void onTick(@NotNull Block thisBlock, @NotNull BlockFace bridgeFace) {
+        final Location machineLocation = thisBlock.getLocation();
         final BlockFace containerFace = bridgeFace.getOppositeFace();
         final Block bridge = thisBlock.getRelative(bridgeFace);
         final Block container = thisBlock.getRelative(containerFace);
-        if (!canDirectlyAccess(bridge.getLocation()) || !canDirectlyAccess(container.getLocation())) {
-            sendFeedback(thisBlock.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-        final NodeDefinition definition = NetworkStorage.getNode(bridge.getLocation());
-        if (definition != null && definition.getNode() != null) {
-            final BlockMenu targetMenu = StorageCacheUtils.getMenu(container.getLocation());
-            if (targetMenu != null) {
-                final NetworkRoot root = definition.getNode().getRoot();
+        final Location bridgeLocation = bridge.getLocation();
+        final Location containerLocation = container.getLocation();
+        FoliaSupport.runRegion(bridgeLocation, () -> {
+            final NodeDefinition definition = NetworkStorage.getNode(bridgeLocation);
+            if (definition == null || definition.getNode() == null) {
+                FoliaSupport.runRegion(machineLocation, () -> sendFeedback(machineLocation, FeedbackType.NO_NETWORK_FOUND));
+                return;
+            }
+
+            final NetworkRoot root = definition.getNode().getRoot();
+            FoliaSupport.runRegion(containerLocation, () -> {
+                final BlockMenu targetMenu = StorageCacheUtils.getMenu(containerLocation);
+                if (targetMenu == null) {
+                    FoliaSupport.runRegion(machineLocation, () -> sendFeedback(machineLocation, FeedbackType.NO_TARGET_BLOCK));
+                    return;
+                }
+
                 final int[] slots = targetMenu
                     .getPreset()
                     .getSlotsAccessedByItemTransport(targetMenu, ItemTransportFlow.WITHDRAW, null);
 
-                if (!PENDING_GRABS.add(thisBlock.getLocation())) {
+                if (!PENDING_GRABS.add(machineLocation)) {
                     return;
                 }
 
-                pushSlotsAsync(thisBlock.getLocation(), targetMenu, root, slots, 0, getLimitQuantity()).whenComplete((ignored, throwable) ->
-                    FoliaSupport.runRegion(thisBlock.getLocation(), () -> {
-                        PENDING_GRABS.remove(thisBlock.getLocation());
-                        sendFeedback(thisBlock.getLocation(), FeedbackType.WORKING);
+                pushSlotsAsync(machineLocation, targetMenu, root, slots, 0, getLimitQuantity()).whenComplete((ignored, throwable) ->
+                    FoliaSupport.runRegion(machineLocation, () -> {
+                        PENDING_GRABS.remove(machineLocation);
+                        sendFeedback(machineLocation, FeedbackType.WORKING);
                     }));
-            }
-            else {
-                sendFeedback(thisBlock.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-                return;
-            }
-        } else {
-            sendFeedback(thisBlock.getLocation(), FeedbackType.NO_NETWORK_FOUND);
-        }
+            });
+        });
     }
 
     private CompletableFuture<Void> pushSlotsAsync(

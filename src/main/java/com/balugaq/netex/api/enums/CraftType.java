@@ -28,7 +28,6 @@ import java.util.function.BiPredicate;
 /**
  * @author balugaq
  */
-@Deprecated
 @NullMarked
 public enum CraftType {
     ANCIENT_ALTAR(SupportedAncientAltarRecipes.getRecipes(), SupportedAncientAltarRecipes::testRecipe),

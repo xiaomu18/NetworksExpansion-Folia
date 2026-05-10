@@ -54,6 +54,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 @SuppressWarnings({"DuplicatedCode"})
 public class ItemFlowViewer extends NetworkObject {
@@ -264,12 +265,17 @@ public class ItemFlowViewer extends NetworkObject {
         return DATE_FORMAT.format(date);
     }
 
+    private static <T> @Nullable T callAtTargetRegion(@NotNull Location location, @NotNull Supplier<T> supplier) {
+        if (location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location)) {
+            return supplier.get();
+        }
+
+        return FoliaSupport.supplyRegion(location, supplier).join();
+    }
+
     @NotNull
     public static ItemStack getIcon(ItemFlowRecord.@NotNull TransportAction action) {
-        if (action.accessor().getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(action.accessor())) {
-            return Icon.UNKNOWN_ITEM.clone();
-        }
-        SlimefunItem sf = StorageCacheUtils.getSfItem(action.accessor());
+        SlimefunItem sf = callAtTargetRegion(action.accessor(), () -> StorageCacheUtils.getSfItem(action.accessor()));
         if (sf == null) {
             return Icon.UNKNOWN_ITEM.clone();
         } else {

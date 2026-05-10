@@ -192,15 +192,23 @@ public class SmartPusher extends SpecialSlimefunItem implements AdminDebuggable 
         final Block thisBlock = blockMenu.getBlock();
         final Block bridge = thisBlock.getRelative(bridgeFace);
         final Block container = thisBlock.getRelative(containerFace);
-        if (!canDirectlyAccess(bridge.getLocation()) || !canDirectlyAccess(container.getLocation())) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-        final NodeDefinition definition = NetworkStorage.getNode(bridge.getLocation());
-        if (definition != null && definition.getNode() != null) {
-            final BlockMenu targetMenu = StorageCacheUtils.getMenu(container.getLocation());
-            if (targetMenu != null) {
-                final NetworkRoot root = definition.getNode().getRoot();
+        final Location bridgeLocation = bridge.getLocation();
+        final Location containerLocation = container.getLocation();
+        FoliaSupport.runRegion(bridgeLocation, () -> {
+            final NodeDefinition definition = NetworkStorage.getNode(bridgeLocation);
+            if (definition == null || definition.getNode() == null) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.NO_NETWORK_FOUND));
+                return;
+            }
+
+            final NetworkRoot root = definition.getNode().getRoot();
+            FoliaSupport.runRegion(containerLocation, () -> {
+                final BlockMenu targetMenu = StorageCacheUtils.getMenu(containerLocation);
+                if (targetMenu == null) {
+                    FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.NO_TARGET_BLOCK));
+                    return;
+                }
+
                 final int[] slots = targetMenu
                     .getPreset()
                     .getSlotsAccessedByItemTransport(targetMenu, ItemTransportFlow.INSERT, null);
@@ -237,24 +245,23 @@ public class SmartPusher extends SpecialSlimefunItem implements AdminDebuggable 
                                 return;
                             }
                             root.getItemStack0Async(menuLocation, itemRequest).whenComplete((retrieved, throwable) ->
-                                FoliaSupport.runRegion(menuLocation, () -> {
-                                    PENDING_PUSHES.remove(menuLocation);
-                                    if (retrieved != null && retrieved.getType() != Material.AIR) {
-                                        BlockMenuUtil.pushItem(targetMenu, retrieved, slots);
-                                        sendFeedback(menuLocation, FeedbackType.WORKING);
-                                    }
+                                FoliaSupport.runRegion(containerLocation, () -> {
+                                    final BlockMenu liveTargetMenu = StorageCacheUtils.getMenu(containerLocation);
+                                    FoliaSupport.runRegion(menuLocation, () -> {
+                                        PENDING_PUSHES.remove(menuLocation);
+                                        if (retrieved != null && retrieved.getType() != Material.AIR && liveTargetMenu != null) {
+                                            BlockMenuUtil.pushItem(liveTargetMenu, retrieved, slots);
+                                            sendFeedback(menuLocation, FeedbackType.WORKING);
+                                        }
+                                    });
                                 }));
                             return;
                         }
                     }
                 }
-                sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-            } else {
-                sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            }
-        } else {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_NETWORK_FOUND);
-        }
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.WORKING));
+            });
+        });
     }
 
     public int getLimitQuantity() {

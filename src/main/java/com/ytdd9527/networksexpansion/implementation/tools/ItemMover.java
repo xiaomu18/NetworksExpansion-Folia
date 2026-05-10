@@ -46,6 +46,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
     @NotNull
@@ -75,6 +76,14 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
 
     private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
         FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
+    private static <T> @Nullable T callAtTargetRegion(@NotNull Location location, @NotNull Supplier<T> supplier) {
+        if (canDirectlyAccess(location)) {
+            return supplier.get();
+        }
+
+        return FoliaSupport.supplyRegion(location, supplier).join();
     }
 
     public ItemMover(
@@ -282,32 +291,30 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
 
     @Nullable
     public static BarrelIdentity getBarrel(@NotNull Player player, @NotNull Location location) {
-        if (!canDirectlyAccess(location)) {
-            player.sendMessage("§cFolia 下无法直接访问另一个 region 中的存储");
+        return callAtTargetRegion(location, () -> {
+            final SlimefunItem sfitem = StorageCacheUtils.getSfItem(location);
+
+            if (sfitem == null) {
+                return null;
+            }
+
+            final boolean infinityEnabled = SupportedPluginManager.getInstance().isInfinityExpansion();
+            final boolean fluffyEnabled = SupportedPluginManager.getInstance().isFluffyMachines();
+
+            /*if (infinityEnabled && sfitem instanceof StorageUnit unit) {
+                return getInfinityBarrel(location, unit);
+            } else */
+            if (fluffyEnabled && sfitem instanceof Barrel barrel) {
+                return getFluffyBarrel(location, barrel);
+            } else if (sfitem instanceof NetworkQuantumStorage) {
+                return getNetworkStorage(location);
+            } else if (sfitem instanceof NetworksDrawer) {
+                sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.item_mover.suggest_use_drawers"));
+                return null;
+            }
+
             return null;
-        }
-        final SlimefunItem sfitem = StorageCacheUtils.getSfItem(location);
-
-        if (sfitem == null) {
-            return null;
-        }
-
-        final boolean infinityEnabled = SupportedPluginManager.getInstance().isInfinityExpansion();
-        final boolean fluffyEnabled = SupportedPluginManager.getInstance().isFluffyMachines();
-
-        /*if (infinityEnabled && sfitem instanceof StorageUnit unit) {
-            return getInfinityBarrel(location, unit);
-        } else */
-        if (fluffyEnabled && sfitem instanceof Barrel barrel) {
-            return getFluffyBarrel(location, barrel);
-        } else if (sfitem instanceof NetworkQuantumStorage) {
-            return getNetworkStorage(location);
-        } else if (sfitem instanceof NetworksDrawer) {
-            player.sendMessage(Lang.getString("messages.unsupported-operation.item_mover.suggest_use_drawers"));
-            return null;
-        }
-
-        return null;
+        });
     }
 
     @Nullable
@@ -486,17 +493,16 @@ public class ItemMover extends SpecialSlimefunItem implements DistinctiveItem {
     }
 
     public static boolean hasPermission(@NotNull Player player, @NotNull Location location) {
-        if (!canDirectlyAccess(location)) {
-            return false;
-        }
-        for (Interaction interaction : CHECK_INTERACTIONS) {
-            if (!Slimefun.getProtectionManager().hasPermission(player, location, interaction)) {
-                return false;
+        return Boolean.TRUE.equals(callAtTargetRegion(location, () -> {
+            for (Interaction interaction : CHECK_INTERACTIONS) {
+                if (!Slimefun.getProtectionManager().hasPermission(player, location, interaction)) {
+                    return false;
+                }
             }
-        }
 
-        SlimefunItem sfitem = StorageCacheUtils.getSfItem(location);
-        return Slimefun.getPermissionsService().hasPermission(player, sfitem);
+            SlimefunItem sfitem = StorageCacheUtils.getSfItem(location);
+            return Slimefun.getPermissionsService().hasPermission(player, sfitem);
+        }));
     }
 
     @Override

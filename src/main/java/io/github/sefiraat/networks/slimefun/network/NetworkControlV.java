@@ -100,16 +100,8 @@ public class NetworkControlV extends NetworkDirectional implements SoftCellBanna
         }
 
         final Block targetBlock = blockMenu.getBlock().getRelative(direction);
-        if (!canDirectlyAccess(targetBlock.getLocation())) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-        final BlockPosition targetPosition = new BlockPosition(targetBlock);
-
-        if (this.blockCache.contains(targetPosition)) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_ALREADY_PASTED);
-            return;
-        }
+        final Location targetLocation = targetBlock.getLocation();
+        final BlockPosition initialTargetPosition = new BlockPosition(targetBlock);
 
         /* Netex - #293
         // No longer check permission
@@ -129,63 +121,80 @@ public class NetworkControlV extends NetworkDirectional implements SoftCellBanna
 
          */
 
-        final Material material = targetBlock.getType();
-
-        if (material != Material.AIR) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_AIR);
-            return;
-        }
-
         final ItemStack templateStack = blockMenu.getItemInSlot(TEMPLATE_SLOT);
+        final ItemStack templateSnapshot = templateStack == null ? null : templateStack.clone();
 
-        if (templateStack == null) {
+        if (templateSnapshot == null) {
             return;
         }
 
-        final Material templateMaterial = templateStack.getType();
+        final Material templateMaterial = templateSnapshot.getType();
 
         if (!templateMaterial.isBlock() || SlimefunTag.SENSITIVE_MATERIALS.isTagged(templateMaterial)) {
             sendFeedback(blockMenu.getLocation(), FeedbackType.INVALID_TEMPLATE);
             return;
         }
 
-        final SlimefunItem slimefunItem = SlimefunItem.getByItem(templateStack);
+        final SlimefunItem slimefunItem = SlimefunItem.getByItem(templateSnapshot);
 
         if (slimefunItem != null) {
             sendFeedback(blockMenu.getLocation(), FeedbackType.INVALID_TEMPLATE);
             return;
         }
 
-        final ItemRequest request = new ItemRequest(templateStack.clone(), 1);
-        if (!pendingPlacements.add(menuLocation)) {
-            return;
-        }
-        definition.getNode().getRoot().getItemStack0Async(menuLocation, request).whenComplete((fetchedStack, throwable) ->
-            FoliaSupport.runRegion(menuLocation, () -> {
-                pendingPlacements.remove(menuLocation);
-                if (fetchedStack == null || fetchedStack.getAmount() < 1) {
-                    sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_RESOURCES);
-                    return;
-                }
-                if (targetBlock.getType() != Material.AIR) {
-                    definition.getNode().getRoot().addItemStack0Async(menuLocation, fetchedStack);
-                    sendFeedback(menuLocation, FeedbackType.BLOCK_CANNOT_BE_AIR);
-                    return;
-                }
+        FoliaSupport.runRegion(targetLocation, () -> {
+            final Block liveTargetBlock = targetLocation.getBlock();
+            final BlockPosition targetPosition = new BlockPosition(liveTargetBlock);
 
-                this.blockCache.add(targetPosition);
-                targetBlock.setType(fetchedStack.getType(), true);
-                if (SupportedPluginManager.getInstance().isMcMMO()) {
-                    try {
-                        mcMMO.getChunkManager().setTrue(targetBlock);
-                    } catch (NoClassDefFoundError e) {
-                        mcMMO.getPlaceStore().setTrue(targetBlock);
+            if (this.blockCache.contains(targetPosition) || this.blockCache.contains(initialTargetPosition)) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.BLOCK_ALREADY_PASTED));
+                return;
+            }
+
+            if (liveTargetBlock.getType() != Material.AIR) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.BLOCK_CANNOT_BE_AIR));
+                return;
+            }
+
+            final ItemRequest request = new ItemRequest(templateSnapshot.clone(), 1);
+            if (!pendingPlacements.add(menuLocation)) {
+                return;
+            }
+            definition.getNode().getRoot().getItemStack0Async(menuLocation, request).whenComplete((fetchedStack, throwable) ->
+                FoliaSupport.runRegion(targetLocation, () -> {
+                    if (fetchedStack == null || fetchedStack.getAmount() < 1) {
+                        FoliaSupport.runRegion(menuLocation, () -> {
+                            pendingPlacements.remove(menuLocation);
+                            sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_RESOURCES);
+                        });
+                        return;
                     }
-                }
-                ParticleUtils.displayParticleRandomly(
-                    LocationUtils.centre(targetBlock.getLocation()), Particle.ELECTRIC_SPARK, 1, 5);
-                sendFeedback(menuLocation, FeedbackType.WORKING);
-            }));
+                    if (liveTargetBlock.getType() != Material.AIR) {
+                        definition.getNode().getRoot().addItemStack0Async(menuLocation, fetchedStack);
+                        FoliaSupport.runRegion(menuLocation, () -> {
+                            pendingPlacements.remove(menuLocation);
+                            sendFeedback(menuLocation, FeedbackType.BLOCK_CANNOT_BE_AIR);
+                        });
+                        return;
+                    }
+
+                    this.blockCache.add(targetPosition);
+                    liveTargetBlock.setType(fetchedStack.getType(), true);
+                    if (SupportedPluginManager.getInstance().isMcMMO()) {
+                        try {
+                            mcMMO.getChunkManager().setTrue(liveTargetBlock);
+                        } catch (NoClassDefFoundError e) {
+                            mcMMO.getPlaceStore().setTrue(liveTargetBlock);
+                        }
+                    }
+                    ParticleUtils.displayParticleRandomly(
+                        LocationUtils.centre(liveTargetBlock.getLocation()), Particle.ELECTRIC_SPARK, 1, 5);
+                    FoliaSupport.runRegion(menuLocation, () -> {
+                        pendingPlacements.remove(menuLocation);
+                        sendFeedback(menuLocation, FeedbackType.WORKING);
+                    });
+                }));
+        });
     }
 
     @Override

@@ -8,6 +8,7 @@ import com.balugaq.netex.api.helpers.Icon;
 import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.balugaq.netex.api.transfer.TransferConfiguration;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -63,19 +64,18 @@ public class WhitelistedTransferGrabber extends NetworkDirectional implements So
         }
 
         final BlockFace direction = this.getCurrentDirection(blockMenu);
-        final BlockMenu targetMenu = StorageCacheUtils.getMenu(
-            blockMenu.getBlock().getRelative(direction).getLocation());
+        final org.bukkit.Location targetLocation = blockMenu.getBlock().getRelative(direction).getLocation();
+        final List<ItemStack> templates = getClonedTemplateItems(blockMenu);
+        FoliaSupport.runRegion(targetLocation, () -> {
+            final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetLocation);
+            if (targetMenu == null) {
+                FoliaSupport.runRegion(blockMenu.getLocation(), () -> sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK));
+                return;
+            }
 
-        if (targetMenu == null) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-
-        List<ItemStack> templates = getClonedTemplateItems(blockMenu);
-
-        grabMenu(blockMenu, targetMenu, root, templates);
-
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+            grabMenu(blockMenu, targetMenu, root, templates);
+            FoliaSupport.runRegion(blockMenu.getLocation(), () -> sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING));
+        });
     }
 
     @Override

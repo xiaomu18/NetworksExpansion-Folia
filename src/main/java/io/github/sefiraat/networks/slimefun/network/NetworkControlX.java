@@ -97,44 +97,10 @@ public class NetworkControlX extends NetworkDirectional implements SoftCellBanna
         }
 
         final Block targetBlock = blockMenu.getBlock().getRelative(direction);
-        if (!canDirectlyAccess(targetBlock.getLocation())) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-        final BlockPosition targetPosition = new BlockPosition(targetBlock);
-
-        if (this.blockCache.contains(targetPosition)) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_ALREADY_CUT);
-            return;
-        }
-
-        final Material material = targetBlock.getType();
-
-        if (material.getHardness() < 0 || material.isAir() || !material.isItem()) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_CUT);
-            return;
-        }
-
-        if (SlimefunTag.CARGO_SUPPORTED_STORAGE_BLOCKS.isTagged(material)) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_CUT);
-            return;
-        }
-
-        final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetBlock.getLocation());
-
-        if (slimefunItem != null) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_CUT);
-            return;
-        }
-
         final ItemStack templateStack = blockMenu.getItemInSlot(TEMPLATE_SLOT);
-        boolean mustMatch = templateStack != null && templateStack.getType() != Material.AIR;
-
-        if ((mustMatch && (targetBlock.getType() != templateStack.getType()))
-            || (SlimefunItem.getByItem(templateStack) != null)) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_NOT_MATCH_TEMPLATE);
-            return;
-        }
+        final ItemStack templateSnapshot = templateStack == null ? null : templateStack.clone();
+        final org.bukkit.Location menuLocation = blockMenu.getLocation();
+        final org.bukkit.Location targetLocation = targetBlock.getLocation();
 
         /* Netex - #293
         // No longer check permission
@@ -157,28 +123,65 @@ public class NetworkControlX extends NetworkDirectional implements SoftCellBanna
 
          */
 
-        final ItemStack resultStack = new ItemStack(material, 1);
-        definition.getNode().getRoot().addItemStack0Async(blockMenu.getLocation(), resultStack).whenComplete((ignored, throwable) ->
-            FoliaSupport.runRegion(blockMenu.getLocation(), () -> {
-                if (resultStack.getAmount() != 0) {
-                    return;
-                }
+        FoliaSupport.runRegion(targetLocation, () -> {
+            final Block liveTargetBlock = targetLocation.getBlock();
+            final BlockPosition targetPosition = new BlockPosition(liveTargetBlock);
 
-                this.blockCache.add(targetPosition);
+            if (this.blockCache.contains(targetPosition)) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.BLOCK_ALREADY_CUT));
+                return;
+            }
 
-                final BlockStateSnapshotResult blockState = PaperLib.getBlockState(targetBlock, true);
+            final Material material = liveTargetBlock.getType();
 
-                if (blockState.getState() instanceof InventoryHolder) {
-                    sendFeedback(blockMenu.getLocation(), FeedbackType.BLOCK_CANNOT_BE_CUT);
-                    return;
-                }
+            if (material.getHardness() < 0 || material.isAir() || !material.isItem()) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.BLOCK_CANNOT_BE_CUT));
+                return;
+            }
 
-                targetBlock.setType(Material.AIR, true);
-                ParticleUtils.displayParticleRandomly(
-                    LocationUtils.centre(targetBlock.getLocation()), 1, 5, DUST_OPTIONS);
-                definition.getNode().getRoot().removeRootPower(REQUIRED_POWER);
-                sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-            }));
+            if (SlimefunTag.CARGO_SUPPORTED_STORAGE_BLOCKS.isTagged(material)) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.BLOCK_CANNOT_BE_CUT));
+                return;
+            }
+
+            final SlimefunItem slimefunItem = StorageCacheUtils.getSfItem(targetLocation);
+
+            if (slimefunItem != null) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.BLOCK_CANNOT_BE_CUT));
+                return;
+            }
+
+            final boolean mustMatch = templateSnapshot != null && templateSnapshot.getType() != Material.AIR;
+
+            if ((mustMatch && (liveTargetBlock.getType() != templateSnapshot.getType()))
+                || (SlimefunItem.getByItem(templateSnapshot) != null)) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.BLOCK_NOT_MATCH_TEMPLATE));
+                return;
+            }
+
+            final ItemStack resultStack = new ItemStack(material, 1);
+            definition.getNode().getRoot().addItemStack0Async(menuLocation, resultStack).whenComplete((ignored, throwable) ->
+                FoliaSupport.runRegion(targetLocation, () -> {
+                    if (resultStack.getAmount() != 0) {
+                        return;
+                    }
+
+                    this.blockCache.add(targetPosition);
+
+                    final BlockStateSnapshotResult blockState = PaperLib.getBlockState(liveTargetBlock, true);
+
+                    if (blockState.getState() instanceof InventoryHolder) {
+                        FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.BLOCK_CANNOT_BE_CUT));
+                        return;
+                    }
+
+                    liveTargetBlock.setType(Material.AIR, true);
+                    ParticleUtils.displayParticleRandomly(
+                        LocationUtils.centre(liveTargetBlock.getLocation()), 1, 5, DUST_OPTIONS);
+                    definition.getNode().getRoot().removeRootPowerAsync(REQUIRED_POWER).whenComplete((powerIgnored, throwable1) ->
+                        FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.WORKING)));
+                }));
+        });
     }
 
     @Override

@@ -3,9 +3,11 @@ package io.github.sefiraat.networks.slimefun.network;
 import com.balugaq.netex.api.enums.FeedbackType;
 import com.balugaq.netex.api.enums.MinecraftVersion;
 import com.balugaq.netex.api.interfaces.SoftCellBannable;
+import com.balugaq.netex.utils.InventoryUtil;
 import com.balugaq.netex.utils.Lang;
 import com.bgsoftware.wildchests.api.WildChestsAPI;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -33,6 +35,9 @@ import org.bukkit.potion.PotionType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 @SuppressWarnings({"DuplicatedCode", "GrazieInspection"})
 public class NetworkVanillaGrabber extends NetworkDirectional implements SoftCellBannable {
 
@@ -47,6 +52,7 @@ public class NetworkVanillaGrabber extends NetworkDirectional implements SoftCel
     private static final int WEST_SLOT = 19;
     private static final int UP_SLOT = 14;
     private static final int DOWN_SLOT = 32;
+    private static final Set<org.bukkit.Location> PENDING_GRABS = ConcurrentHashMap.newKeySet();
 
     public NetworkVanillaGrabber(
         @NotNull ItemGroup itemGroup,
@@ -89,10 +95,8 @@ public class NetworkVanillaGrabber extends NetworkDirectional implements SoftCel
         final BlockFace direction = getCurrentDirection(blockMenu);
         final Block block = blockMenu.getBlock();
         final Block targetBlock = block.getRelative(direction);
-        if (!canDirectlyAccess(targetBlock.getLocation())) {
-            sendFeedback(block.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
+        final org.bukkit.Location menuLocation = blockMenu.getLocation();
+        final org.bukkit.Location targetLocation = targetBlock.getLocation();
 
         /* Netex - #293
         // No longer check permission
@@ -117,87 +121,169 @@ public class NetworkVanillaGrabber extends NetworkDirectional implements SoftCel
             return;
         }
         */
-        // Netex start - #287
-        if (StorageCacheUtils.getMenu(targetBlock.getLocation()) != null) {
-            return;
-        }
-        // Netex end - #287
-
-        final BlockState blockState = PaperLib.getBlockState(targetBlock, false).getState();
-
-        if (!(blockState instanceof InventoryHolder holder)) {
-            sendFeedback(block.getLocation(), FeedbackType.NO_INVENTORY_FOUND);
+        if (!PENDING_GRABS.add(menuLocation)) {
             return;
         }
 
-        boolean wildChests = Networks.getSupportedPluginManager().isWildChests();
-        boolean isChest = wildChests && WildChestsAPI.getChest(targetBlock.getLocation()) != null;
+        FoliaSupport.runRegion(targetLocation, () -> {
+            // Netex start - #287
+            if (StorageCacheUtils.getMenu(targetLocation) != null) {
+                FoliaSupport.runRegion(menuLocation, () -> PENDING_GRABS.remove(menuLocation));
+                return;
+            }
+            // Netex end - #287
 
-        sendDebugMessage(block.getLocation(), String.format(Lang.getString("messages.debug.wildchests"), wildChests));
-        sendDebugMessage(block.getLocation(), String.format(Lang.getString("messages.debug.ischest"), isChest));
+            final BlockState blockState = PaperLib.getBlockState(targetLocation.getBlock(), false).getState();
 
-        if (wildChests && isChest) {
-            sendDebugMessage(block.getLocation(), Lang.getString("messages.debug.wildchests-trigger-failed"));
-            sendFeedback(block.getLocation(), FeedbackType.PROTECTED_BLOCK);
-            return;
-        }
-
-        sendDebugMessage(block.getLocation(), Lang.getString("messages.debug.wildchests-trigger-success"));
-        final Inventory inventory = holder.getInventory();
-
-        if (inventory instanceof FurnaceInventory furnaceInventory) {
-            final ItemStack furnaceInventoryResult = furnaceInventory.getResult();
-            final ItemStack furnaceInventoryFuel = furnaceInventory.getFuel();
-            grabItem(blockMenu, furnaceInventoryResult);
-
-            if (furnaceInventoryFuel != null && furnaceInventoryFuel.getType() == Material.BUCKET) {
-                grabItem(blockMenu, furnaceInventoryFuel);
+            if (!(blockState instanceof InventoryHolder holder)) {
+                FoliaSupport.runRegion(menuLocation, () -> {
+                    PENDING_GRABS.remove(menuLocation);
+                    sendFeedback(menuLocation, FeedbackType.NO_INVENTORY_FOUND);
+                });
+                return;
             }
 
-        } else if (inventory instanceof BrewerInventory brewerInventory) {
-            if (!(blockState instanceof BrewingStand brewingStand)) return;
-            if (brewingStand.getBrewingTime() > 0) return;
+            boolean wildChests = Networks.getSupportedPluginManager().isWildChests();
+            boolean isChest = wildChests && WildChestsAPI.getChest(targetLocation) != null;
 
-            for (int i = 0; i < 3; i++) {
-                final ItemStack stack = brewerInventory.getContents()[i];
-                if (stack != null && stack.getType() != Material.AIR) {
-                    if (stack.getItemMeta() instanceof PotionMeta potionMeta) {
-                        if (Networks.getInstance().getMCVersion().isAtLeast(MinecraftVersion.V1_20_5)) {
-                            if (potionMeta.getBasePotionType() != PotionType.WATER) {
-                                grabItem(blockMenu, stack);
-                                break;
-                            }
-                        } else {
-                            PotionData bpd = potionMeta.getBasePotionData();
-                            if (bpd != null && bpd.getType() != PotionType.WATER) {
-                                grabItem(blockMenu, stack);
-                                break;
-                            }
-                        }
-                    } else {
-                        grabItem(blockMenu, stack);
-                        break;
+            sendDebugMessage(menuLocation, String.format(Lang.getString("messages.debug.wildchests"), wildChests));
+            sendDebugMessage(menuLocation, String.format(Lang.getString("messages.debug.ischest"), isChest));
+
+            if (wildChests && isChest) {
+                sendDebugMessage(menuLocation, Lang.getString("messages.debug.wildchests-trigger-failed"));
+                FoliaSupport.runRegion(menuLocation, () -> {
+                    PENDING_GRABS.remove(menuLocation);
+                    sendFeedback(menuLocation, FeedbackType.PROTECTED_BLOCK);
+                });
+                return;
+            }
+
+            sendDebugMessage(menuLocation, Lang.getString("messages.debug.wildchests-trigger-success"));
+            final Inventory inventory = holder.getInventory();
+            final GrabResult result;
+
+            if (inventory instanceof FurnaceInventory furnaceInventory) {
+                result = tryTakeFromFurnace(furnaceInventory);
+            } else if (inventory instanceof BrewerInventory brewerInventory) {
+                if (!(blockState instanceof BrewingStand brewingStand) || brewingStand.getBrewingTime() > 0) {
+                    FoliaSupport.runRegion(menuLocation, () -> PENDING_GRABS.remove(menuLocation));
+                    return;
+                }
+                result = tryTakeFromBrewer(brewerInventory);
+            } else {
+                result = tryTakeFromInventory(inventory);
+            }
+
+            if (result == null) {
+                FoliaSupport.runRegion(menuLocation, () -> PENDING_GRABS.remove(menuLocation));
+                return;
+            }
+
+            FoliaSupport.runRegion(menuLocation, () -> {
+                final ItemStack liveOutput = blockMenu.getItemInSlot(OUTPUT_SLOT);
+                if (liveOutput == null || liveOutput.getType() == Material.AIR) {
+                    blockMenu.replaceExistingItem(OUTPUT_SLOT, result.itemStack());
+                    PENDING_GRABS.remove(menuLocation);
+                    sendFeedback(menuLocation, FeedbackType.WORKING);
+                } else {
+                    FoliaSupport.runRegion(targetLocation, result.restore());
+                    PENDING_GRABS.remove(menuLocation);
+                }
+            });
+        });
+    }
+
+    private @Nullable GrabResult tryTakeFromFurnace(@NotNull FurnaceInventory furnaceInventory) {
+        final ItemStack result = furnaceInventory.getResult();
+        if (result != null && result.getType() != Material.AIR) {
+            final ItemStack taken = result.clone();
+            furnaceInventory.setResult(null);
+            return new GrabResult(taken, () -> {
+                if (furnaceInventory.getResult() == null || furnaceInventory.getResult().getType() == Material.AIR) {
+                    furnaceInventory.setResult(taken.clone());
+                } else {
+                    InventoryUtil.addItem(furnaceInventory, taken.clone());
+                }
+            });
+        }
+
+        final ItemStack fuel = furnaceInventory.getFuel();
+        if (fuel != null && fuel.getType() == Material.BUCKET) {
+            final ItemStack taken = fuel.clone();
+            furnaceInventory.setFuel(null);
+            return new GrabResult(taken, () -> {
+                if (furnaceInventory.getFuel() == null || furnaceInventory.getFuel().getType() == Material.AIR) {
+                    furnaceInventory.setFuel(taken.clone());
+                } else {
+                    InventoryUtil.addItem(furnaceInventory, taken.clone());
+                }
+            });
+        }
+
+        return null;
+    }
+
+    private @Nullable GrabResult tryTakeFromBrewer(@NotNull BrewerInventory brewerInventory) {
+        for (int i = 0; i < 3; i++) {
+            final ItemStack stack = brewerInventory.getContents()[i];
+            if (stack == null || stack.getType() == Material.AIR) {
+                continue;
+            }
+
+            if (stack.getItemMeta() instanceof PotionMeta potionMeta) {
+                if (Networks.getInstance().getMCVersion().isAtLeast(MinecraftVersion.V1_20_5)) {
+                    if (potionMeta.getBasePotionType() == PotionType.WATER) {
+                        continue;
+                    }
+                } else {
+                    PotionData bpd = potionMeta.getBasePotionData();
+                    if (bpd == null || bpd.getType() == PotionType.WATER) {
+                        continue;
                     }
                 }
             }
-        } else {
-            for (ItemStack stack : inventory.getContents()) {
-                if (grabItem(blockMenu, stack)) {
-                    break;
+
+            final int slot = i;
+            final ItemStack taken = stack.clone();
+            brewerInventory.setItem(slot, null);
+            return new GrabResult(taken, () -> {
+                final ItemStack live = brewerInventory.getItem(slot);
+                if (live == null || live.getType() == Material.AIR) {
+                    brewerInventory.setItem(slot, taken.clone());
+                } else {
+                    InventoryUtil.addItem(brewerInventory, taken.clone());
                 }
-            }
+            });
         }
+
+        return null;
     }
 
-    private boolean grabItem(@NotNull BlockMenu blockMenu, @Nullable ItemStack stack) {
-        if (stack != null && stack.getType() != Material.AIR) {
-            blockMenu.replaceExistingItem(OUTPUT_SLOT, stack.clone());
-            stack.setAmount(0);
-            sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-            return true;
-        } else {
-            return false;
+    private @Nullable GrabResult tryTakeFromInventory(@NotNull Inventory inventory) {
+        final ItemStack[] contents = inventory.getContents();
+        for (int i = 0; i < contents.length; i++) {
+            final ItemStack stack = contents[i];
+            if (stack == null || stack.getType() == Material.AIR) {
+                continue;
+            }
+
+            final int slot = i;
+            final ItemStack taken = stack.clone();
+            inventory.setItem(slot, null);
+            return new GrabResult(taken, () -> {
+                final ItemStack live = inventory.getItem(slot);
+                if (live == null || live.getType() == Material.AIR) {
+                    inventory.setItem(slot, taken.clone());
+                } else {
+                    InventoryUtil.addItem(inventory, taken.clone());
+                }
+            });
         }
+
+        return null;
+    }
+
+    private record GrabResult(@NotNull ItemStack itemStack, @NotNull Runnable restore) {
     }
 
     @Override

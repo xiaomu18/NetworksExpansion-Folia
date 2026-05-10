@@ -7,6 +7,7 @@ import com.balugaq.netex.utils.InventoryUtil;
 import com.balugaq.netex.utils.Lang;
 import com.bgsoftware.wildchests.api.WildChestsAPI;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.Networks;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -32,6 +33,9 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 @SuppressWarnings({"DuplicatedCode", "GrazieInspection"})
 public class NetworkVanillaPusher extends NetworkDirectional implements SoftCellBannable {
 
@@ -46,6 +50,7 @@ public class NetworkVanillaPusher extends NetworkDirectional implements SoftCell
     private static final int WEST_SLOT = 19;
     private static final int UP_SLOT = 14;
     private static final int DOWN_SLOT = 32;
+    private static final Set<org.bukkit.Location> PENDING_PUSHES = ConcurrentHashMap.newKeySet();
 
     public NetworkVanillaPusher(
         @NotNull ItemGroup itemGroup,
@@ -79,10 +84,8 @@ public class NetworkVanillaPusher extends NetworkDirectional implements SoftCell
         final BlockFace direction = getCurrentDirection(blockMenu);
         final Block block = blockMenu.getBlock();
         final Block targetBlock = blockMenu.getBlock().getRelative(direction);
-        if (!canDirectlyAccess(targetBlock.getLocation())) {
-            sendFeedback(block.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
+        final org.bukkit.Location menuLocation = blockMenu.getLocation();
+        final org.bukkit.Location targetLocation = targetBlock.getLocation();
         // Fix for early vanilla pusher release
         /* Netex - #293
         // No longer check permission
@@ -107,27 +110,6 @@ public class NetworkVanillaPusher extends NetworkDirectional implements SoftCell
         }
 
          */
-        // Netex start - #287
-        if (StorageCacheUtils.getMenu(targetBlock.getLocation()) != null) {
-            return;
-        }
-        // Netex end - #287
-
-        final BlockState blockState = PaperLib.getBlockState(targetBlock, false).getState();
-
-        if (!(blockState instanceof InventoryHolder holder)) {
-            sendFeedback(block.getLocation(), FeedbackType.NO_INVENTORY_FOUND);
-            return;
-        }
-
-        if (Networks.getInstance().getMCVersion().isAtLeast(MinecraftVersion.V1_21)) {
-            if (blockState instanceof CrafterInventory) {
-                sendFeedback(block.getLocation(), FeedbackType.NOT_ALLOWED_BLOCK);
-                return;
-            }
-        }
-
-        final Inventory inventory = holder.getInventory();
         final ItemStack stack = blockMenu.getItemInSlot(INPUT_SLOT);
 
         if (stack == null || stack.getType() == Material.AIR) {
@@ -135,49 +117,97 @@ public class NetworkVanillaPusher extends NetworkDirectional implements SoftCell
             return;
         }
 
-        boolean wildChests = Networks.getSupportedPluginManager().isWildChests();
-        boolean isChest = wildChests && WildChestsAPI.getChest(targetBlock.getLocation()) != null;
-
-        sendDebugMessage(block.getLocation(), String.format(Lang.getString("messages.debug.wildchests"), wildChests));
-        sendDebugMessage(block.getLocation(), String.format(Lang.getString("messages.debug.ischest"), isChest));
-
-        if (inventory instanceof FurnaceInventory furnace) {
-            handleFurnace(blockMenu, stack, furnace);
-        } else if (inventory instanceof BrewerInventory brewer) {
-            handleBrewingStand(blockMenu, stack, brewer);
-        } else if (wildChests && isChest) {
-            sendDebugMessage(block.getLocation(), Lang.getString("messages.debug.wildchests-trigger-failed"));
-        } else if (InvUtils.fits(holder.getInventory(), stack)) {
-            sendDebugMessage(block.getLocation(), Lang.getString("messages.debug.wildchests-trigger-success"));
-            InventoryUtil.addItem(holder.getInventory(), stack);
+        if (!PENDING_PUSHES.add(menuLocation)) {
+            return;
         }
+
+        final ItemStack transfer = stack.clone();
+        blockMenu.replaceExistingItem(INPUT_SLOT, new ItemStack(Material.AIR));
+
+        FoliaSupport.runRegion(targetLocation, () -> {
+            // Netex start - #287
+            if (StorageCacheUtils.getMenu(targetLocation) != null) {
+                FoliaSupport.runRegion(menuLocation, () -> finishPush(blockMenu, transfer, FeedbackType.NO_TARGET_BLOCK));
+                return;
+            }
+            // Netex end - #287
+
+            final BlockState blockState = PaperLib.getBlockState(targetLocation.getBlock(), false).getState();
+
+            if (!(blockState instanceof InventoryHolder holder)) {
+                FoliaSupport.runRegion(menuLocation, () -> finishPush(blockMenu, transfer, FeedbackType.NO_INVENTORY_FOUND));
+                return;
+            }
+
+            if (Networks.getInstance().getMCVersion().isAtLeast(MinecraftVersion.V1_21) && blockState instanceof CrafterInventory) {
+                FoliaSupport.runRegion(menuLocation, () -> finishPush(blockMenu, transfer, FeedbackType.NOT_ALLOWED_BLOCK));
+                return;
+            }
+
+            final Inventory inventory = holder.getInventory();
+            boolean wildChests = Networks.getSupportedPluginManager().isWildChests();
+            boolean isChest = wildChests && WildChestsAPI.getChest(targetLocation) != null;
+
+            sendDebugMessage(menuLocation, String.format(Lang.getString("messages.debug.wildchests"), wildChests));
+            sendDebugMessage(menuLocation, String.format(Lang.getString("messages.debug.ischest"), isChest));
+
+            FeedbackType feedback = FeedbackType.NO_ITEM_FOUND;
+            if (inventory instanceof FurnaceInventory furnace) {
+                feedback = handleFurnace(transfer, furnace) ? FeedbackType.WORKING : FeedbackType.NO_ITEM_FOUND;
+            } else if (inventory instanceof BrewerInventory brewer) {
+                feedback = handleBrewingStand(transfer, brewer) ? FeedbackType.WORKING : FeedbackType.NO_ITEM_FOUND;
+            } else if (wildChests && isChest) {
+                sendDebugMessage(menuLocation, Lang.getString("messages.debug.wildchests-trigger-failed"));
+            } else if (InvUtils.fits(holder.getInventory(), transfer.clone())) {
+                sendDebugMessage(menuLocation, Lang.getString("messages.debug.wildchests-trigger-success"));
+                InventoryUtil.addItem(holder.getInventory(), transfer);
+                feedback = transfer.getAmount() <= 0 ? FeedbackType.WORKING : FeedbackType.NO_ITEM_FOUND;
+            }
+
+            final FeedbackType resultFeedback = feedback;
+            FoliaSupport.runRegion(menuLocation, () -> finishPush(blockMenu, transfer, resultFeedback));
+        });
     }
 
-    private void handleFurnace(
-        @NotNull BlockMenu blockMenu, @NotNull ItemStack stack, @NotNull FurnaceInventory furnace) {
+    private void finishPush(@NotNull BlockMenu blockMenu, @NotNull ItemStack transfer, @NotNull FeedbackType feedback) {
+        if (transfer.getAmount() > 0) {
+            final ItemStack live = blockMenu.getItemInSlot(INPUT_SLOT);
+            if (live == null || live.getType() == Material.AIR) {
+                blockMenu.replaceExistingItem(INPUT_SLOT, transfer.clone());
+            } else {
+                InventoryUtil.addItem(blockMenu.toInventory(), transfer.clone());
+            }
+        }
+
+        PENDING_PUSHES.remove(blockMenu.getLocation());
+        sendFeedback(blockMenu.getLocation(), feedback);
+    }
+
+    private boolean handleFurnace(@NotNull ItemStack stack, @NotNull FurnaceInventory furnace) {
         if (stack.getType().isFuel()
             && (furnace.getFuel() == null || furnace.getFuel().getType() == Material.AIR)) {
             furnace.setFuel(stack.clone());
             stack.setAmount(0);
-            sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+            return true;
         } else if (furnace.canSmelt(stack) && (furnace.getSmelting() == null || furnace.getSmelting().getType() == Material.AIR)) {
             furnace.setSmelting(stack.clone());
             stack.setAmount(0);
-            sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+            return true;
         }
+
+        return false;
     }
 
-    private void handleBrewingStand(
-        @NotNull BlockMenu blockMenu, @NotNull ItemStack stack, @NotNull BrewerInventory brewer) {
+    private boolean handleBrewingStand(@NotNull ItemStack stack, @NotNull BrewerInventory brewer) {
         if (stack.getType() == Material.BLAZE_POWDER) {
             if (brewer.getFuel() == null || brewer.getFuel().getType() == Material.AIR) {
                 brewer.setFuel(stack.clone());
                 stack.setAmount(0);
-                sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+                return true;
             } else if (brewer.getIngredient() == null || brewer.getIngredient().getType() == Material.AIR) {
                 brewer.setIngredient(stack.clone());
                 stack.setAmount(0);
-                sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+                return true;
             }
         } else if (stack.getType() == Material.POTION || stack.getType() == Material.SPLASH_POTION || stack.getType() == Material.LINGERING_POTION) {
             for (int i = 0; i < 3; i++) {
@@ -187,15 +217,16 @@ public class NetworkVanillaPusher extends NetworkDirectional implements SoftCell
                     contents[i] = stack.clone();
                     brewer.setContents(contents);
                     stack.setAmount(0);
-                    sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
-                    return;
+                    return true;
                 }
             }
         } else if (brewer.getIngredient() == null || brewer.getIngredient().getType() == Material.AIR) {
             brewer.setIngredient(stack.clone());
             stack.setAmount(0);
-            sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+            return true;
         }
+
+        return false;
     }
 
     @Override

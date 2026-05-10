@@ -27,6 +27,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 @SuppressWarnings("DuplicatedCode")
 @UtilityClass
@@ -57,32 +58,21 @@ public class LineOperationUtil {
         boolean skipNoMenu,
         boolean optimizeExperience,
         @NotNull Consumer<BlockMenu> consumer) {
-        requireRegionOwnership(startLocation);
-        Location location = startLocation.clone();
-        int finalLimit = limit;
-        if (optimizeExperience) {
-            finalLimit += 1;
-        }
-        for (int i = 0; i < finalLimit; i++) {
-            switch (direction) {
-                case NORTH -> location.setZ(location.getZ() - 1);
-                case SOUTH -> location.setZ(location.getZ() + 1);
-                case EAST -> location.setX(location.getX() + 1);
-                case WEST -> location.setX(location.getX() - 1);
-                case UP -> location.setY(location.getY() + 1);
-                case DOWN -> location.setY(location.getY() - 1);
-            }
-            requireRegionOwnership(location);
-            final BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
-            if (blockMenu == null) {
-                if (skipNoMenu) {
-                    continue;
-                } else {
-                    return;
-                }
-            }
+        doOperationAsync(startLocation, direction, limit, skipNoMenu, optimizeExperience, blockMenu -> {
             consumer.accept(blockMenu);
-        }
+            return CompletableFuture.completedFuture(null);
+        }).join();
+    }
+
+    public static @NotNull CompletableFuture<Void> doOperationAsync(
+        @NotNull Location startLocation,
+        @NotNull BlockFace direction,
+        int limit,
+        boolean skipNoMenu,
+        boolean optimizeExperience,
+        @NotNull Function<BlockMenu, CompletableFuture<Void>> consumer) {
+        int finalLimit = optimizeExperience ? limit + 1 : limit;
+        return iterateMenusAsync(startLocation.clone(), direction, finalLimit, skipNoMenu, consumer);
     }
 
     public static void doVanillaOperation(
@@ -109,37 +99,21 @@ public class LineOperationUtil {
         boolean skipNoInventory,
         boolean optimizeExperience,
         @NotNull Consumer<BlockMenu> consumer) {
-        requireRegionOwnership(startLocation);
-        Location location = startLocation.clone();
-        int finalLimit = limit;
-        if (optimizeExperience) {
-            finalLimit += 1;
-        }
-        for (int i = 0; i < finalLimit; i++) {
-            switch (direction) {
-                case NORTH -> location.setZ(location.getZ() - 1);
-                case SOUTH -> location.setZ(location.getZ() + 1);
-                case EAST -> location.setX(location.getX() + 1);
-                case WEST -> location.setX(location.getX() - 1);
-                case UP -> location.setY(location.getY() + 1);
-                case DOWN -> location.setY(location.getY() - 1);
-            }
-            requireRegionOwnership(location);
-            BlockState state = location.getBlock().getState(false);
-            if (state instanceof InventoryHolder holder) {
-                Inventory inv = holder.getInventory();
-                if (inv != null) {
-                    var wrapper = new VanillaInventoryWrapper(inv, state);
-                    consumer.accept(wrapper);
-                }
-            } else {
-                if (skipNoInventory) {
-                    continue;
-                } else {
-                    return;
-                }
-            }
-        }
+        doVanillaOperationAsync(startLocation, direction, limit, skipNoInventory, optimizeExperience, blockMenu -> {
+            consumer.accept(blockMenu);
+            return CompletableFuture.completedFuture(null);
+        }).join();
+    }
+
+    public static @NotNull CompletableFuture<Void> doVanillaOperationAsync(
+        @NotNull Location startLocation,
+        @NotNull BlockFace direction,
+        int limit,
+        boolean skipNoInventory,
+        boolean optimizeExperience,
+        @NotNull Function<BlockMenu, CompletableFuture<Void>> consumer) {
+        int finalLimit = optimizeExperience ? limit + 1 : limit;
+        return iterateVanillaMenusAsync(startLocation.clone(), direction, finalLimit, skipNoInventory, consumer);
     }
 
     public static void doEnergyOperation(
@@ -166,30 +140,21 @@ public class LineOperationUtil {
         boolean allowNoMenu,
         boolean optimizeExperience,
         @NotNull Consumer<Location> consumer) {
-        requireRegionOwnership(startLocation);
-        Location location = startLocation.clone();
-        int finalLimit = limit;
-        if (optimizeExperience) {
-            finalLimit += 1;
-        }
-        for (int i = 0; i < finalLimit; i++) {
-            switch (direction) {
-                case NORTH -> location.setZ(location.getZ() - 1);
-                case SOUTH -> location.setZ(location.getZ() + 1);
-                case EAST -> location.setX(location.getX() + 1);
-                case WEST -> location.setX(location.getX() - 1);
-                case UP -> location.setY(location.getY() + 1);
-                case DOWN -> location.setY(location.getY() - 1);
-            }
-            requireRegionOwnership(location);
-            final BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
-            if (blockMenu == null) {
-                if (!allowNoMenu) {
-                    return;
-                }
-            }
+        doEnergyOperationAsync(startLocation, direction, limit, allowNoMenu, optimizeExperience, location -> {
             consumer.accept(location);
-        }
+            return CompletableFuture.completedFuture(null);
+        }).join();
+    }
+
+    public static @NotNull CompletableFuture<Void> doEnergyOperationAsync(
+        @NotNull Location startLocation,
+        @NotNull BlockFace direction,
+        int limit,
+        boolean allowNoMenu,
+        boolean optimizeExperience,
+        @NotNull Function<Location, CompletableFuture<Void>> consumer) {
+        int finalLimit = optimizeExperience ? limit + 1 : limit;
+        return iterateEnergyAsync(startLocation.clone(), direction, finalLimit, allowNoMenu, consumer);
     }
 
     @Deprecated
@@ -214,170 +179,7 @@ public class LineOperationUtil {
         @NotNull BlockMenu blockMenu,
         @NotNull TransportMode transportMode,
         int limitQuantity) {
-        final int[] slots =
-            blockMenu.getPreset().getSlotsAccessedByItemTransport(blockMenu, ItemTransportFlow.WITHDRAW, null);
-
-        int limit = limitQuantity;
-        switch (transportMode) {
-            case NONE, NONNULL_ONLY -> {
-                /*
-                 * Grab all the items.
-                 */
-                for (int slot : slots) {
-                    final ItemStack item = blockMenu.getItemInSlot(slot);
-                    if (item != null && item.getType() != Material.AIR) {
-                        final int exceptedReceive = Math.min(item.getAmount(), limit);
-                        final ItemStack clone = StackUtils.getAsQuantity(item, exceptedReceive);
-                        root.addItemStack0(accessor, clone);
-                        item.setAmount(item.getAmount() - (exceptedReceive - clone.getAmount()));
-                        limit -= exceptedReceive - clone.getAmount();
-                        if (limit <= 0) {
-                            break;
-                        }
-                    }
-                }
-            }
-            case NULL_ONLY -> {
-                /*
-                 * Nothing to do.
-                 */
-            }
-            case FIRST_ONLY -> {
-                /*
-                 * Grab the first item only.
-                 */
-                if (slots.length > 0) {
-                    final ItemStack item = blockMenu.getItemInSlot(slots[0]);
-                    if (item != null && item.getType() != Material.AIR) {
-                        final int exceptedReceive = Math.min(item.getAmount(), limit);
-                        final ItemStack clone = StackUtils.getAsQuantity(item, exceptedReceive);
-                        root.addItemStack0(accessor, clone);
-                        item.setAmount(item.getAmount() - (exceptedReceive - clone.getAmount()));
-                        clone.getAmount();
-                    }
-                }
-            }
-            case LAST_ONLY -> {
-                /*
-                 * Grab the last item only.
-                 */
-                if (slots.length > 0) {
-                    final ItemStack item = blockMenu.getItemInSlot(slots[slots.length - 1]);
-                    if (item != null && item.getType() != Material.AIR) {
-                        final int exceptedReceive = Math.min(item.getAmount(), limit);
-                        final ItemStack clone = StackUtils.getAsQuantity(item, exceptedReceive);
-                        root.addItemStack0(accessor, clone);
-                        item.setAmount(item.getAmount() - (exceptedReceive - clone.getAmount()));
-                        clone.getAmount();
-                    }
-                }
-            }
-            case FIRST_STOP -> {
-                /*
-                 * Grab the first non-null item only.
-                 */
-                for (int slot : slots) {
-                    final ItemStack item = blockMenu.getItemInSlot(slot);
-                    if (item != null && item.getType() != Material.AIR) {
-                        final int exceptedReceive = Math.min(item.getAmount(), limit);
-                        final ItemStack clone = StackUtils.getAsQuantity(item, exceptedReceive);
-                        root.addItemStack0(accessor, clone);
-                        item.setAmount(item.getAmount() - (exceptedReceive - clone.getAmount()));
-                        clone.getAmount();
-                        break;
-                    }
-                }
-            }
-            case LAZY -> {
-                /*
-                 * When it's first item is non-null, we will grab all the items.
-                 */
-                if (slots.length > 0) {
-                    final ItemStack delta = blockMenu.getItemInSlot(slots[0]);
-                    if (delta != null && delta.getType() != Material.AIR) {
-                        for (int slot : slots) {
-                            ItemStack item = blockMenu.getItemInSlot(slot);
-                            if (item != null && item.getType() != Material.AIR) {
-                                final int exceptedReceive = Math.min(item.getAmount(), limit);
-                                final ItemStack clone = StackUtils.getAsQuantity(item, exceptedReceive);
-                                root.addItemStack0(accessor, clone);
-                                item.setAmount(item.getAmount() - (exceptedReceive - clone.getAmount()));
-                                limit -= exceptedReceive - clone.getAmount();
-                                if (limit <= 0) {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            case VOID -> {
-                /*
-                 * Grab all the items or trash it
-                 */
-                for (int slot : slots) {
-                    final ItemStack item = blockMenu.getItemInSlot(slot);
-                    if (item != null && item.getType() != Material.AIR) {
-                        final int exceptedReceive = Math.min(item.getAmount(), limit);
-                        final ItemStack clone = StackUtils.getAsQuantity(item, exceptedReceive);
-                        root.addItemStack0(accessor, clone);
-                        limit -= exceptedReceive - clone.getAmount();
-                        item.setAmount(0);
-                        if (limit <= 0) {
-                            break;
-                        }
-                    }
-                }
-            }
-            case SPECIFIED_QUANTITY -> {
-                java.util.Map<Integer, ItemStack> itemSamples = new java.util.LinkedHashMap<>();
-                java.util.Map<Integer, Integer> itemTotals = new java.util.LinkedHashMap<>();
-                int typeIndex = 0;
-                for (int slot : slots) {
-                    final ItemStack item = blockMenu.getItemInSlot(slot);
-                    if (item == null || item.getType() == Material.AIR) {
-                        continue;
-                    }
-                    boolean found = false;
-                    for (var entry : itemSamples.entrySet()) {
-                        if (StackUtils.itemsMatch(entry.getValue(), item)) {
-                            itemTotals.merge(entry.getKey(), item.getAmount(), Integer::sum);
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        itemSamples.put(typeIndex, StackUtils.getAsQuantity(item, 1));
-                        itemTotals.put(typeIndex, item.getAmount());
-                        typeIndex++;
-                    }
-                }
-                for (var entry : itemSamples.entrySet()) {
-                    final int total = itemTotals.get(entry.getKey());
-                    if (total <= limitQuantity) {
-                        continue;
-                    }
-                    int toRemove = total - limitQuantity;
-                    for (int i = slots.length - 1; i >= 0 && toRemove > 0; i--) {
-                        final ItemStack item = blockMenu.getItemInSlot(slots[i]);
-                        if (item == null || item.getType() == Material.AIR) {
-                            continue;
-                        }
-                        if (!StackUtils.itemsMatch(entry.getValue(), item)) {
-                            continue;
-                        }
-                        final int grabFromSlot = Math.min(item.getAmount(), toRemove);
-                        final int beforeAmount = item.getAmount();
-                        item.setAmount(grabFromSlot);
-                        root.addItemStack0(accessor, item);
-                        final int afterAmount = item.getAmount();
-                        final int actualGrabbed = grabFromSlot - afterAmount;
-                        item.setAmount(beforeAmount - actualGrabbed);
-                        toRemove -= actualGrabbed;
-                    }
-                }
-            }
-        }
+        grabItemAsync(accessor, root, blockMenu, transportMode, limitQuantity);
     }
 
     @Deprecated
@@ -500,260 +302,7 @@ public class LineOperationUtil {
         @NotNull ItemStack clone,
         @NotNull TransportMode transportMode,
         int limitQuantity) {
-        final ItemRequest itemRequest = new ItemRequest(clone, clone.getMaxStackSize());
-
-        final int[] slots =
-            blockMenu.getPreset().getSlotsAccessedByItemTransport(blockMenu, ItemTransportFlow.INSERT, clone);
-        switch (transportMode) {
-            case NONE -> {
-                int freeSpace = 0;
-                for (int slot : slots) {
-                    final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                    if (itemStack == null || itemStack.getType() == Material.AIR) {
-                        freeSpace += clone.getMaxStackSize();
-                    } else {
-                        if (itemStack.getAmount() >= clone.getMaxStackSize()) {
-                            continue;
-                        }
-                        if (StackUtils.itemsMatch(itemRequest, itemStack)) {
-                            final int availableSpace = itemStack.getMaxStackSize() - itemStack.getAmount();
-                            if (availableSpace > 0) {
-                                freeSpace += availableSpace;
-                            }
-                        }
-                    }
-                }
-                if (freeSpace <= 0) {
-                    return;
-                }
-                itemRequest.setAmount(Math.min(freeSpace, limitQuantity));
-
-                final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                if (retrieved != null && retrieved.getType() != Material.AIR) {
-                    BlockMenuUtil.pushItem(blockMenu, retrieved, slots);
-                }
-            }
-
-            case NULL_ONLY -> {
-                int free = limitQuantity;
-                for (int slot : slots) {
-                    final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                    if (itemStack == null || itemStack.getType() == Material.AIR) {
-                        itemRequest.setAmount(clone.getMaxStackSize());
-                    } else {
-                        continue;
-                    }
-                    itemRequest.setAmount(Math.min(itemRequest.getAmount(), free));
-
-                    final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                    if (retrieved != null && retrieved.getType() != Material.AIR) {
-                        free -= retrieved.getAmount();
-                        BlockMenuUtil.pushItem(blockMenu, retrieved, slot);
-                        if (free <= 0) {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            case NONNULL_ONLY -> {
-                int free = limitQuantity;
-                for (int slot : slots) {
-                    final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                    if (itemStack == null || itemStack.getType() == Material.AIR) {
-                        continue;
-                    }
-                    if (itemStack.getAmount() >= clone.getMaxStackSize()) {
-                        continue;
-                    }
-                    if (StackUtils.itemsMatch(itemRequest, itemStack)) {
-                        final int space = itemStack.getMaxStackSize() - itemStack.getAmount();
-                        if (space > 0) {
-                            itemRequest.setAmount(space);
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                    itemRequest.setAmount(Math.min(itemRequest.getAmount(), free));
-
-                    final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                    if (retrieved != null && retrieved.getType() != Material.AIR) {
-                        free -= retrieved.getAmount();
-                        BlockMenuUtil.pushItem(blockMenu, retrieved, slot);
-                        if (free <= 0) {
-                            break;
-                        }
-                    }
-                }
-            }
-            case FIRST_ONLY -> {
-                if (slots.length == 0) {
-                    break;
-                }
-                final int slot = slots[0];
-                final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                if (itemStack == null || itemStack.getType() == Material.AIR) {
-                    itemRequest.setAmount(clone.getMaxStackSize());
-                } else {
-                    if (itemStack.getAmount() >= clone.getMaxStackSize()) {
-                        return;
-                    }
-                    if (StackUtils.itemsMatch(itemRequest, itemStack)) {
-                        final int space = itemStack.getMaxStackSize() - itemStack.getAmount();
-                        if (space > 0) {
-                            itemRequest.setAmount(space);
-                        } else {
-                            return;
-                        }
-                    } else {
-                        return;
-                    }
-                }
-                itemRequest.setAmount(Math.min(itemRequest.getAmount(), limitQuantity));
-
-                final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                if (retrieved != null && retrieved.getType() != Material.AIR) {
-                    retrieved.getAmount();
-                    BlockMenuUtil.pushItem(blockMenu, retrieved, slot);
-                }
-            }
-            case LAST_ONLY -> {
-                if (slots.length == 0) {
-                    break;
-                }
-                final int slot = slots[slots.length - 1];
-                final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                if (itemStack == null || itemStack.getType() == Material.AIR) {
-                    itemRequest.setAmount(clone.getMaxStackSize());
-                } else {
-                    if (itemStack.getAmount() >= clone.getMaxStackSize()) {
-                        return;
-                    }
-                    if (StackUtils.itemsMatch(itemRequest, itemStack)) {
-                        final int space = itemStack.getMaxStackSize() - itemStack.getAmount();
-                        if (space > 0) {
-                            itemRequest.setAmount(space);
-                        } else {
-                            return;
-                        }
-                    } else {
-                        return;
-                    }
-                }
-                itemRequest.setAmount(Math.min(itemRequest.getAmount(), limitQuantity));
-
-                final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                if (retrieved != null && retrieved.getType() != Material.AIR) {
-                    retrieved.getAmount();
-                    BlockMenuUtil.pushItem(blockMenu, retrieved, slot);
-                }
-            }
-            case FIRST_STOP -> {
-                int freeSpace = 0;
-                for (int slot : slots) {
-                    final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                    if (itemStack == null || itemStack.getType() == Material.AIR) {
-                        freeSpace += clone.getMaxStackSize();
-                        break;
-                    } else {
-                        if (itemStack.getAmount() >= clone.getMaxStackSize()) {
-                            continue;
-                        }
-                        if (StackUtils.itemsMatch(itemRequest, itemStack)) {
-                            final int availableSpace = itemStack.getMaxStackSize() - itemStack.getAmount();
-                            if (availableSpace > 0) {
-                                freeSpace += availableSpace;
-                            }
-                        }
-                        break;
-                    }
-                }
-                if (freeSpace <= 0) {
-                    return;
-                }
-                itemRequest.setAmount(Math.min(freeSpace, limitQuantity));
-
-                final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                if (retrieved != null && retrieved.getType() != Material.AIR) {
-                    BlockMenuUtil.pushItem(blockMenu, retrieved, slots);
-                }
-            }
-            case LAZY -> {
-                if (slots.length > 0) {
-                    final ItemStack delta = blockMenu.getItemInSlot(slots[0]);
-                    if (delta == null || delta.getType() == Material.AIR) {
-                        int freeSpace = 0;
-                        for (int slot : slots) {
-                            final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                            if (itemStack == null || itemStack.getType() == Material.AIR) {
-                                freeSpace += clone.getMaxStackSize();
-                            } else {
-                                if (itemStack.getAmount() >= clone.getMaxStackSize()) {
-                                    continue;
-                                }
-                                if (StackUtils.itemsMatch(itemRequest, itemStack)) {
-                                    final int availableSpace = itemStack.getMaxStackSize() - itemStack.getAmount();
-                                    if (availableSpace > 0) {
-                                        freeSpace += availableSpace;
-                                    }
-                                }
-                            }
-                        }
-                        if (freeSpace <= 0) {
-                            return;
-                        }
-                        itemRequest.setAmount(Math.min(freeSpace, limitQuantity));
-
-                        final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                        if (retrieved != null && retrieved.getType() != Material.AIR) {
-                            BlockMenuUtil.pushItem(blockMenu, retrieved, slots);
-                        }
-                    }
-                }
-            }
-            case VOID -> {
-                itemRequest.setAmount(limitQuantity);
-
-                final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                if (retrieved != null && retrieved.getType() != Material.AIR) {
-                    BlockMenuUtil.pushItem(blockMenu, retrieved, slots);
-                }
-            }
-            case SPECIFIED_QUANTITY -> {
-                int existingCount = 0;
-                for (int slot : slots) {
-                    final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                    if (itemStack != null && itemStack.getType() != Material.AIR) {
-                        if (StackUtils.itemsMatch(itemRequest, itemStack)) {
-                            existingCount += itemStack.getAmount();
-                        }
-                    }
-                }
-                if (existingCount < limitQuantity) {
-                    final int deficit = limitQuantity - existingCount;
-                    int availableSpace = 0;
-                    for (int slot : slots) {
-                        final ItemStack itemStack = blockMenu.getItemInSlot(slot);
-                        if (itemStack == null || itemStack.getType() == Material.AIR) {
-                            availableSpace += clone.getMaxStackSize();
-                        } else if (StackUtils.itemsMatch(itemRequest, itemStack)) {
-                            availableSpace += Math.max(0, itemStack.getMaxStackSize() - itemStack.getAmount());
-                        }
-                    }
-                    if (availableSpace <= 0) {
-                        return;
-                    }
-                    final int toRequest = Math.min(deficit, availableSpace);
-                    itemRequest.setAmount(toRequest);
-                    final ItemStack retrieved = root.getItemStack0(accessor, itemRequest);
-                    if (retrieved != null && retrieved.getType() != Material.AIR) {
-                        BlockMenuUtil.pushItem(blockMenu, retrieved, slots);
-                    }
-                }
-            }
-        }
+        pushItemAsync(accessor, root, blockMenu, clone, transportMode, limitQuantity);
     }
 
     @Deprecated
@@ -1231,47 +780,147 @@ public class LineOperationUtil {
     }
 
     public static void outPower(@NotNull Location location, @NotNull NetworkRoot root, int rate) {
-        requireRegionOwnership(location);
-        final SlimefunBlockData blockData = StorageCacheUtils.getBlock(location);
-        if (blockData == null) {
-            return;
-        }
-
-        if (!blockData.isDataLoaded()) {
-            StorageCacheUtils.requestLoad(blockData);
-            return;
-        }
-
-        final SlimefunItem slimefunItem = SlimefunItem.getById(blockData.getSfId());
-        if (!(slimefunItem instanceof EnergyNetComponent component) || slimefunItem instanceof NetworkObject) {
-            return;
-        }
-
-        int existingCharge = component.getCharge(location);
-
-        final int capacity = component.getCapacity();
-        final int space = capacity - existingCharge;
-
-        if (space <= 0) {
-            return;
-        }
-
-        final int possibleGeneration = Math.min(rate, space);
-        final long power = root.getRootPower();
-
-        if (power <= 0) {
-            return;
-        }
-
-        final int gen = power < possibleGeneration ? (int) power : possibleGeneration;
-
-        component.addCharge(location, gen);
-        root.removeRootPower(gen);
+        outPowerAsync(location, root, rate).join();
     }
 
-    private static void requireRegionOwnership(@NotNull Location location) {
-        if (location.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(location)) {
-            throw new IllegalStateException("Cross-region line operation at " + location);
+    public static @NotNull CompletableFuture<Void> outPowerAsync(
+        @NotNull Location location,
+        @NotNull NetworkRoot root,
+        int rate) {
+        return FoliaSupport.supplyRegion(location, () -> {
+            final SlimefunBlockData blockData = StorageCacheUtils.getBlock(location);
+            if (blockData == null) {
+                return 0;
+            }
+
+            if (!blockData.isDataLoaded()) {
+                StorageCacheUtils.requestLoad(blockData);
+                return 0;
+            }
+
+            final SlimefunItem slimefunItem = SlimefunItem.getById(blockData.getSfId());
+            if (!(slimefunItem instanceof EnergyNetComponent component) || slimefunItem instanceof NetworkObject) {
+                return 0;
+            }
+
+            final int existingCharge = component.getCharge(location);
+            final int capacity = component.getCapacity();
+            final int space = capacity - existingCharge;
+
+            if (space <= 0) {
+                return 0;
+            }
+
+            final int possibleGeneration = Math.min(rate, space);
+            final long power = root.getRootPower();
+            if (power <= 0) {
+                return 0;
+            }
+
+            final int gen = power < possibleGeneration ? (int) power : possibleGeneration;
+            component.addCharge(location, gen);
+            return gen;
+        }).thenCompose(generated -> {
+            if (generated <= 0) {
+                return CompletableFuture.completedFuture(null);
+            }
+
+            return root.removeRootPowerAsync(generated);
+        });
+    }
+
+    private static @NotNull CompletableFuture<Void> iterateMenusAsync(
+        @NotNull Location current,
+        @NotNull BlockFace direction,
+        int remaining,
+        boolean skipNoMenu,
+        @NotNull Function<BlockMenu, CompletableFuture<Void>> consumer) {
+        if (remaining <= 0) {
+            return CompletableFuture.completedFuture(null);
         }
+
+        final Location next = step(current, direction);
+        return FoliaSupport.supplyRegion(next, () -> StorageCacheUtils.getMenu(next))
+            .thenCompose(blockMenu -> {
+                if (blockMenu == null) {
+                    if (skipNoMenu) {
+                        return iterateMenusAsync(next, direction, remaining - 1, true, consumer);
+                    }
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                return consumer.apply(blockMenu)
+                    .thenCompose(ignored -> iterateMenusAsync(next, direction, remaining - 1, skipNoMenu, consumer));
+            });
+    }
+
+    private static @NotNull CompletableFuture<Void> iterateVanillaMenusAsync(
+        @NotNull Location current,
+        @NotNull BlockFace direction,
+        int remaining,
+        boolean skipNoInventory,
+        @NotNull Function<BlockMenu, CompletableFuture<Void>> consumer) {
+        if (remaining <= 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final Location next = step(current, direction);
+        return FoliaSupport.supplyRegion(next, () -> {
+            BlockState state = next.getBlock().getState(false);
+            if (state instanceof InventoryHolder holder) {
+                Inventory inv = holder.getInventory();
+                if (inv != null) {
+                    return new VanillaInventoryWrapper(inv, state);
+                }
+            }
+            return null;
+        }).thenCompose(wrapper -> {
+            if (wrapper == null) {
+                if (skipNoInventory) {
+                    return iterateVanillaMenusAsync(next, direction, remaining - 1, true, consumer);
+                }
+                return CompletableFuture.completedFuture(null);
+            }
+
+            return consumer.apply(wrapper)
+                .thenCompose(ignored -> iterateVanillaMenusAsync(next, direction, remaining - 1, skipNoInventory, consumer));
+        });
+    }
+
+    private static @NotNull CompletableFuture<Void> iterateEnergyAsync(
+        @NotNull Location current,
+        @NotNull BlockFace direction,
+        int remaining,
+        boolean allowNoMenu,
+        @NotNull Function<Location, CompletableFuture<Void>> consumer) {
+        if (remaining <= 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final Location next = step(current, direction);
+        return FoliaSupport.supplyRegion(next, () -> StorageCacheUtils.getMenu(next) != null)
+            .thenCompose(hasMenu -> {
+                if (!hasMenu && !allowNoMenu) {
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                return consumer.apply(next)
+                    .thenCompose(ignored -> iterateEnergyAsync(next, direction, remaining - 1, allowNoMenu, consumer));
+            });
+    }
+
+    private static @NotNull Location step(@NotNull Location location, @NotNull BlockFace direction) {
+        Location next = location.clone();
+        switch (direction) {
+            case NORTH -> next.setZ(next.getZ() - 1);
+            case SOUTH -> next.setZ(next.getZ() + 1);
+            case EAST -> next.setX(next.getX() + 1);
+            case WEST -> next.setX(next.getX() - 1);
+            case UP -> next.setY(next.getY() + 1);
+            case DOWN -> next.setY(next.getY() - 1);
+            default -> {
+            }
+        }
+        return next;
     }
 }

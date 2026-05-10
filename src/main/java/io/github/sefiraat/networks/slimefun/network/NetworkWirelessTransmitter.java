@@ -181,22 +181,22 @@ public class NetworkWirelessTransmitter extends NetworkObject {
                     }
 
                     BlockMenuUtil.pushItem(currentLinkedMenu, stackToPush, NetworkWirelessReceiver.RECEIVED_SLOT);
-                    FoliaSupport.runRegion(location, () -> {
-                        pendingTransfers.remove(location);
-                        definition.getNode().getRoot().removeRootPower(REQUIRED_POWER);
-                        if (stackToPush.getAmount() > 0) {
-                            definition.getNode().getRoot().addItemStack0Async(location, stackToPush);
-                        }
-                        sendFeedback(location, FeedbackType.WORKING);
-                        if (definition.getNode().getRoot().isDisplayParticles()) {
-                            final Location particleLocation =
-                                blockMenu.getLocation().clone().add(0.5, 1.1, 0.5);
-                            final Location particleLocation2 =
-                                currentLinkedMenu.getLocation().clone().add(0.5, 2.1, 0.5);
-                            particleLocation.getWorld().spawnParticle(Particle.WAX_ON, particleLocation, 0, 0, 4, 0);
-                            particleLocation2.getWorld().spawnParticle(Particle.WAX_OFF, particleLocation2, 0, 0, -4, 0);
-                        }
-                    });
+                    definition.getNode().getRoot().removeRootPowerAsync(REQUIRED_POWER).whenComplete((ignored, powerThrowable) ->
+                        FoliaSupport.runRegion(location, () -> {
+                            pendingTransfers.remove(location);
+                            if (stackToPush.getAmount() > 0) {
+                                definition.getNode().getRoot().addItemStack0Async(location, stackToPush);
+                            }
+                            sendFeedback(location, FeedbackType.WORKING);
+                            if (definition.getNode().getRoot().isDisplayParticles()) {
+                                final Location particleLocation =
+                                    blockMenu.getLocation().clone().add(0.5, 1.1, 0.5);
+                                final Location particleLocation2 =
+                                    currentLinkedMenu.getLocation().clone().add(0.5, 2.1, 0.5);
+                                particleLocation.getWorld().spawnParticle(Particle.WAX_ON, particleLocation, 0, 0, 4, 0);
+                                particleLocation2.getWorld().spawnParticle(Particle.WAX_OFF, particleLocation2, 0, 0, -4, 0);
+                            }
+                        }));
                 });
             });
         });

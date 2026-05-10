@@ -34,8 +34,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -46,6 +45,18 @@ public class CargoNodeQuickTool extends SpecialSlimefunItem {
 
     private static boolean canDirectlyAccess(@NotNull Location location) {
         return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
+    }
+
+    private static void runAtTargetRegion(@NotNull Location location, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(location)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(location, runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
     }
 
     public CargoNodeQuickTool(
@@ -74,187 +85,248 @@ public class CargoNodeQuickTool extends SpecialSlimefunItem {
                 p.sendMessage(Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.invalid_tool"));
                 return;
             }
-            Location bLoc = target.getLocation();
-            if (!canDirectlyAccess(bLoc)) {
-                p.sendMessage("§cFolia 下无法直接配置另一个 region 中的货运节点");
-                return;
-            }
-            // If not cargo node block, return.
-            SlimefunBlockData blockData = StorageCacheUtils.getBlock(bLoc);
-            if (blockData == null || !blockData.getSfId().startsWith("CARGO_NODE_")) {
-                p.sendMessage(Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.invalid_node"));
-                return;
-            }
-            ItemMeta meta = tool.getItemMeta();
-            PersistentDataContainer container = meta.getPersistentDataContainer();
-            if (p.isSneaking()) {
-                // process to load config from target
-                switch (blockData.getSfId()) {
-                    case "CARGO_NODE_INPUT":
-                    case "CARGO_NODE_OUTPUT_ADVANCED":
-                        YamlConfiguration itemConfig = new YamlConfiguration();
-                        BlockMenu inv = blockData.getBlockMenu();
-                        if (inv == null) {
-                            return;
-                        }
-                        for (int slot : listSlots) {
-                            ItemStack itemInSlot = inv.getItemInSlot(slot);
-                            if (itemInSlot != null) itemConfig.set(String.valueOf(slot), itemInSlot);
-                        }
-                        container.set(listKey, PersistentDataType.STRING, itemConfig.saveToString());
-                    case "CARGO_NODE_OUTPUT":
-                        // save cargo type and config
-                        container.set(cargoKey, PersistentDataType.STRING, blockData.getSfId());
-                        container.set(configKey, PersistentDataType.STRING, gson.toJson(blockData.getAllData()));
-                        // update lore
-                        List<String> lore = meta.getLore();
-                        if (lore == null) {
-                            lore = new ArrayList<>(1);
-                        }
-                        SlimefunItem sf = SlimefunItem.getById(blockData.getSfId());
-                        if (sf != null) {
-                            lore.set(
-                                lore.size() - 1,
-                                String.format(
-                                    Lang.getString(
-                                        "messages.completed-operation.cargo_node_quick_tool.node_set"),
-                                    sf.getItemName()));
-                        }
-                        meta.setLore(lore);
-                        tool.setItemMeta(meta);
-                        p.sendMessage(
-                            Lang.getString("messages.completed-operation.cargo_node_quick_tool.config_saved"));
-                        return;
-                    default:
-                        p.sendMessage(
-                            Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.invalid_node"));
-                }
-            } else {
-                // process to set config to target
-                String storedId = container.get(cargoKey, PersistentDataType.STRING);
-                if (storedId == null) {
-                    p.sendMessage(Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.no-config"));
-                    return;
-                }
-                if (!storedId.equalsIgnoreCase(blockData.getSfId())) {
-                    p.sendMessage(
-                        Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.node-type-not-same"));
-                    return;
-                }
-                BlockMenu inv = blockData.getBlockMenu();
-                if (inv == null) {
+            final Location bLoc = target.getLocation();
+            runAtTargetRegion(bLoc, () -> {
+                final SlimefunBlockData blockData = StorageCacheUtils.getBlock(bLoc);
+                if (blockData == null || !blockData.getSfId().startsWith("CARGO_NODE_")) {
+                    sendPlayerMessage(p, Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.invalid_node"));
                     return;
                 }
 
-                switch (blockData.getSfId()) {
-                    case "CARGO_NODE_INPUT":
-                    case "CARGO_NODE_OUTPUT_ADVANCED":
-                        YamlConfiguration itemConfig = new YamlConfiguration();
-                        try {
-                            String cfg = container.get(listKey, PersistentDataType.STRING);
-                            if (cfg == null) {
-                                return;
-                            }
-                            itemConfig.loadFromString(cfg);
-                        } catch (Exception ex) {
-                            Debug.trace(ex);
-                            return;
-                        }
-                        if (!itemConfig.getKeys(false).isEmpty()) {
-                            Map<ItemStack, Boolean> itemList = new HashMap<>();
-                            Map<ItemStack, Integer> consumeSlots = new HashMap<>();
-                            // init item check list
-                            for (String each : itemConfig.getKeys(false)) {
-                                itemList.put(itemConfig.getItemStack(each), false);
-                            }
-                            PlayerInventory pInv = p.getInventory();
-                            for (int i = 0; i <= 35; i++) {
-                                ItemStack includeItem = isInclude(pInv.getItem(i), itemList);
-                                if (includeItem != null) consumeSlots.put(includeItem, i);
-                                // if all included, stop checking
-                                if (isAllTrue(itemList.values())) break;
-                            }
-                            if (isAllTrue(itemList.values())) {
-                                // replace items in target inv
-                                for (int slot : listSlots) {
-                                    ItemStack item = itemConfig.getItemStack(String.valueOf(slot));
-                                    if (item != null) {
-                                        int consumeSlot = consumeSlots.get(item);
-                                        ItemStack itemInInv = pInv.getItem(consumeSlot);
-                                        if (itemInInv == null) {
-                                            continue;
-                                        }
-                                        ItemStack itemInTarget = inv.getItemInSlot(slot);
-                                        if (SlimefunUtils.isItemSimilar(itemInTarget, item, true, false)) {
-                                            if (itemInTarget.getAmount() < item.getAmount()) {
-                                                itemInInv.setAmount(Math.max(
-                                                    itemInInv.getAmount()
-                                                        - (item.getAmount() - itemInTarget.getAmount()),
-                                                    0));
-                                            }
-                                        } else {
-                                            itemInInv.setAmount(Math.max(itemInInv.getAmount() - item.getAmount(), 0));
-                                        }
-                                        pInv.setItem(consumeSlot, itemInInv);
-                                        inv.replaceExistingItem(slot, item);
-                                    } else {
-                                        inv.replaceExistingItem(slot, null);
-                                    }
-                                }
-                            } else {
-                                p.sendMessage(Lang.getString(
-                                    "messages.unsupported-operation.cargo_node_quick_tool.not-enough-items"));
-                                for (ItemStack item : itemList.keySet()) {
-                                    if (!itemList.get(item)) {
-                                        p.sendMessage(TextUtil.color("- &e" + ItemStackHelper.getDisplayName(item) + "x"
-                                            + item.getAmount()));
-                                    } else {
-                                        for (int slot : listSlots) {
-                                            inv.replaceExistingItem(slot, null);
-                                        }
-                                    }
-                                    return;
-                                }
-                            }
-                        }
-
-                    case "CARGO_NODE_OUTPUT":
-                        Map<String, String> config = gson.fromJson(
-                            container.get(configKey, PersistentDataType.STRING),
-                            new TypeToken<Map<String, String>>() {
-                            }.getType());
-                        if (config != null) {
-                            config.forEach(blockData::setData);
-                        }
-                        inv.getPreset().newInstance(inv, bLoc);
-                        p.sendMessage(
-                            Lang.getString("messages.completed-operation.cargo_node_quick_tool.pasted_config"));
-                        return;
-                    default:
-                        p.sendMessage(
-                            Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.invalid_node"));
+                if (p.isSneaking()) {
+                    saveConfigToTool(p, tool, bLoc, blockData);
+                } else {
+                    pasteConfigFromTool(p, tool, bLoc, blockData);
                 }
-            }
+            });
         });
     }
 
-    private @Nullable ItemStack isInclude(@Nullable ItemStack item, @NotNull Map<ItemStack, Boolean> checkList) {
-        for (ItemStack each : checkList.keySet()) {
-            if (item != null
-                && StackUtils.itemsMatch(each, item, true, false)
-                && item.getAmount() >= each.getAmount()) {
-                checkList.put(each, true);
-                return each;
+    private void saveConfigToTool(
+        @NotNull Player player,
+        @NotNull ItemStack tool,
+        @NotNull Location location,
+        @NotNull SlimefunBlockData blockData) {
+        final String sfId = blockData.getSfId();
+        String listConfigString = null;
+        if ("CARGO_NODE_INPUT".equals(sfId) || "CARGO_NODE_OUTPUT_ADVANCED".equals(sfId)) {
+            final BlockMenu inv = blockData.getBlockMenu();
+            if (inv == null) {
+                return;
             }
+
+            final YamlConfiguration itemConfig = new YamlConfiguration();
+            for (int slot : listSlots) {
+                final ItemStack itemInSlot = inv.getItemInSlot(slot);
+                if (itemInSlot != null) {
+                    itemConfig.set(String.valueOf(slot), itemInSlot);
+                }
+            }
+            listConfigString = itemConfig.saveToString();
+        } else if (!"CARGO_NODE_OUTPUT".equals(sfId)) {
+            sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.invalid_node"));
+            return;
         }
-        return null;
+
+        final String finalListConfigString = listConfigString;
+        final String configJson = gson.toJson(blockData.getAllData());
+        final SlimefunItem sf = SlimefunItem.getById(sfId);
+        FoliaSupport.runPlayer(player, () -> {
+            final ItemMeta meta = tool.getItemMeta();
+            if (meta == null) {
+                return;
+            }
+            final PersistentDataContainer container = meta.getPersistentDataContainer();
+            if (finalListConfigString != null) {
+                container.set(listKey, PersistentDataType.STRING, finalListConfigString);
+            }
+            container.set(cargoKey, PersistentDataType.STRING, sfId);
+            container.set(configKey, PersistentDataType.STRING, configJson);
+
+            List<String> lore = meta.getLore();
+            if (lore == null) {
+                lore = new ArrayList<>(1);
+            }
+            if (lore.isEmpty()) {
+                lore.add("");
+            }
+            if (sf != null) {
+                lore.set(
+                    lore.size() - 1,
+                    String.format(
+                        Lang.getString("messages.completed-operation.cargo_node_quick_tool.node_set"),
+                        sf.getItemName()));
+            }
+            meta.setLore(lore);
+            tool.setItemMeta(meta);
+            player.sendMessage(Lang.getString("messages.completed-operation.cargo_node_quick_tool.config_saved"));
+        });
     }
 
-    private boolean isAllTrue(@NotNull Collection<Boolean> set) {
-        for (boolean each : set) {
-            if (!each) return false;
+    private void pasteConfigFromTool(
+        @NotNull Player player,
+        @NotNull ItemStack tool,
+        @NotNull Location location,
+        @NotNull SlimefunBlockData blockData) {
+        final ItemMeta meta = tool.getItemMeta();
+        if (meta == null) {
+            return;
         }
-        return true;
+        final PersistentDataContainer container = meta.getPersistentDataContainer();
+        final String storedId = container.get(cargoKey, PersistentDataType.STRING);
+        if (storedId == null) {
+            sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.no-config"));
+            return;
+        }
+        if (!storedId.equalsIgnoreCase(blockData.getSfId())) {
+            sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.node-type-not-same"));
+            return;
+        }
+
+        final BlockMenu inv = blockData.getBlockMenu();
+        if (inv == null) {
+            return;
+        }
+
+        final String sfId = blockData.getSfId();
+        final String cfg = container.get(listKey, PersistentDataType.STRING);
+        final String configJson = container.get(configKey, PersistentDataType.STRING);
+        if ("CARGO_NODE_INPUT".equals(sfId) || "CARGO_NODE_OUTPUT_ADVANCED".equals(sfId)) {
+            final YamlConfiguration itemConfig = new YamlConfiguration();
+            try {
+                if (cfg == null) {
+                    return;
+                }
+                itemConfig.loadFromString(cfg);
+            } catch (Exception ex) {
+                Debug.trace(ex);
+                return;
+            }
+
+            final Map<Integer, ItemStack> desiredItems = new LinkedHashMap<>();
+            final Map<Integer, ItemStack> targetSnapshot = new LinkedHashMap<>();
+            for (int slot : listSlots) {
+                desiredItems.put(slot, itemConfig.getItemStack(String.valueOf(slot)));
+                final ItemStack current = inv.getItemInSlot(slot);
+                targetSnapshot.put(slot, current == null ? null : current.clone());
+            }
+
+            FoliaSupport.runPlayer(player, () -> {
+                final List<ItemStack> missing = new ArrayList<>();
+                final List<ItemStack> requiredItems = buildRequiredItems(desiredItems, targetSnapshot);
+                for (ItemStack required : requiredItems) {
+                    final int available = countAvailable(player.getInventory(), required);
+                    if (available < required.getAmount()) {
+                        missing.add(required.clone());
+                    }
+                }
+
+                if (!missing.isEmpty()) {
+                    player.sendMessage(Lang.getString(
+                        "messages.unsupported-operation.cargo_node_quick_tool.not-enough-items"));
+                    for (ItemStack item : missing) {
+                        player.sendMessage(TextUtil.color("- &e" + ItemStackHelper.getDisplayName(item) + "x"
+                            + item.getAmount()));
+                    }
+                    return;
+                }
+
+                for (ItemStack required : requiredItems) {
+                    consumeFromInventory(player.getInventory(), required);
+                }
+
+                FoliaSupport.runRegion(location, () -> {
+                    for (int slot : listSlots) {
+                        inv.replaceExistingItem(slot, desiredItems.get(slot));
+                    }
+                    applyCargoNodeData(inv, blockData, location, configJson);
+                    sendPlayerMessage(player,
+                        Lang.getString("messages.completed-operation.cargo_node_quick_tool.pasted_config"));
+                });
+            });
+            return;
+        }
+
+        if ("CARGO_NODE_OUTPUT".equals(sfId)) {
+            applyCargoNodeData(inv, blockData, location, configJson);
+            sendPlayerMessage(player,
+                Lang.getString("messages.completed-operation.cargo_node_quick_tool.pasted_config"));
+            return;
+        }
+
+        sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.cargo_node_quick_tool.invalid_node"));
+    }
+
+    private void applyCargoNodeData(
+        @NotNull BlockMenu inv,
+        @NotNull SlimefunBlockData blockData,
+        @NotNull Location location,
+        @Nullable String configJson) {
+        Map<String, String> config = gson.fromJson(
+            configJson,
+            new TypeToken<Map<String, String>>() {
+            }.getType());
+        if (config != null) {
+            config.forEach(blockData::setData);
+        }
+        inv.getPreset().newInstance(inv, location);
+    }
+
+    private @NotNull List<ItemStack> buildRequiredItems(
+        @NotNull Map<Integer, ItemStack> desiredItems,
+        @NotNull Map<Integer, ItemStack> targetSnapshot) {
+        final List<ItemStack> required = new ArrayList<>();
+        for (int slot : listSlots) {
+            final ItemStack desired = desiredItems.get(slot);
+            if (desired == null) {
+                continue;
+            }
+            final ItemStack existing = targetSnapshot.get(slot);
+            int neededAmount = desired.getAmount();
+            if (SlimefunUtils.isItemSimilar(existing, desired, true, false)) {
+                neededAmount = Math.max(0, desired.getAmount() - existing.getAmount());
+            }
+            if (neededAmount <= 0) {
+                continue;
+            }
+            mergeRequiredItem(required, StackUtils.getAsQuantity(desired, neededAmount));
+        }
+        return required;
+    }
+
+    private void mergeRequiredItem(@NotNull List<ItemStack> required, @NotNull ItemStack incoming) {
+        for (ItemStack existing : required) {
+            if (StackUtils.itemsMatch(existing, incoming, true, false)) {
+                existing.setAmount(existing.getAmount() + incoming.getAmount());
+                return;
+            }
+        }
+        required.add(incoming);
+    }
+
+    private int countAvailable(@NotNull PlayerInventory inventory, @NotNull ItemStack template) {
+        int available = 0;
+        for (int i = 0; i <= 35; i++) {
+            final ItemStack item = inventory.getItem(i);
+            if (item != null && StackUtils.itemsMatch(item, template, true, false)) {
+                available += item.getAmount();
+            }
+        }
+        return available;
+    }
+
+    private void consumeFromInventory(@NotNull PlayerInventory inventory, @NotNull ItemStack template) {
+        int remaining = template.getAmount();
+        for (int i = 0; i <= 35 && remaining > 0; i++) {
+            final ItemStack item = inventory.getItem(i);
+            if (item == null || !StackUtils.itemsMatch(item, template, true, false)) {
+                continue;
+            }
+            final int handled = Math.min(remaining, item.getAmount());
+            item.setAmount(item.getAmount() - handled);
+            inventory.setItem(i, item.getAmount() > 0 ? item : null);
+            remaining -= handled;
+        }
     }
 
     private boolean isTool(@Nullable ItemStack tool) {

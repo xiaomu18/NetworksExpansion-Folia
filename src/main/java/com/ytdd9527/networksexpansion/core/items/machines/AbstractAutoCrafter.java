@@ -200,7 +200,7 @@ public abstract class AbstractAutoCrafter extends NetworkObject implements SoftC
                 FoliaSupport.runRegion(menuLocation, () -> {
                     PENDING_CRAFTS.remove(menuLocation);
                     if (Boolean.TRUE.equals(success)) {
-                        root.removeRootPower(this.chargePerCraft);
+                        root.removeRootPowerAsync(this.chargePerCraft);
                     }
                 }));
         } else {

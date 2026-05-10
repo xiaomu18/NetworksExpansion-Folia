@@ -58,6 +58,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 @SuppressWarnings({"deprecation", "DuplicatedCode"})
 public class QuantumManager extends NetworkObject {
@@ -136,14 +137,35 @@ public class QuantumManager extends NetworkObject {
         return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
+    private static void runAtTargetRegion(@NotNull Location location, @NotNull Runnable runnable) {
+        if (canDirectlyAccess(location)) {
+            runnable.run();
+        } else {
+            FoliaSupport.runRegion(location, runnable);
+        }
+    }
+
+    private static void sendPlayerMessage(@NotNull Player player, @NotNull String message) {
+        FoliaSupport.runPlayer(player, () -> player.sendMessage(message));
+    }
+
+    private static <T> @Nullable T callAtTargetRegion(@NotNull Location location, @NotNull Supplier<T> supplier) {
+        if (canDirectlyAccess(location)) {
+            return supplier.get();
+        }
+
+        return FoliaSupport.supplyRegion(location, supplier).join();
+    }
+
     public static @Nullable String getStorageName(@NotNull Location barrelLocation) {
         return StorageCacheUtils.getData(barrelLocation, BS_NAME);
     }
 
     public static void setStorageIcon(
         @NotNull Player player, @NotNull Location barrelLocation, @NotNull ItemStack cursor) {
-        StorageCacheUtils.setData(barrelLocation, BS_ICON, serializeIcon(cursor));
-        player.sendMessage(Lang.getString("messages.completed-operation.manager.set_icon"));
+        final String serialized = serializeIcon(cursor);
+        runAtTargetRegion(barrelLocation, () -> StorageCacheUtils.setData(barrelLocation, BS_ICON, serialized));
+        sendPlayerMessage(player, Lang.getString("messages.completed-operation.manager.set_icon"));
     }
 
     public static @Nullable ItemStack getStorageIcon(@NotNull Location barrelLocation) {
@@ -180,13 +202,15 @@ public class QuantumManager extends NetworkObject {
     }
 
     public static void topOrUntopStorage(@NotNull Player player, @NotNull Location barrelLocation) {
-        if (Objects.equals(StorageCacheUtils.getData(barrelLocation, BS_TOP), BS_TOP_1B)) {
-            StorageCacheUtils.setData(barrelLocation, BS_TOP, BS_TOP_0B);
-            player.sendMessage(Lang.getString("messages.completed-operation.manager.top_storage_off"));
-        } else {
-            StorageCacheUtils.setData(barrelLocation, BS_TOP, BS_TOP_1B);
-            player.sendMessage(Lang.getString("messages.completed-operation.manager.top_storage_on"));
-        }
+        runAtTargetRegion(barrelLocation, () -> {
+            if (Objects.equals(StorageCacheUtils.getData(barrelLocation, BS_TOP), BS_TOP_1B)) {
+                StorageCacheUtils.setData(barrelLocation, BS_TOP, BS_TOP_0B);
+                sendPlayerMessage(player, Lang.getString("messages.completed-operation.manager.top_storage_off"));
+            } else {
+                StorageCacheUtils.setData(barrelLocation, BS_TOP, BS_TOP_1B);
+                sendPlayerMessage(player, Lang.getString("messages.completed-operation.manager.top_storage_on"));
+            }
+        });
     }
 
     public static boolean isTopStorage(@NotNull Location barrelLocation) {
@@ -196,44 +220,47 @@ public class QuantumManager extends NetworkObject {
 
     public static void setItem(
         @NotNull BarrelIdentity barrel, @NotNull Location barrelLocation, @NotNull Player player) {
-        if (!canDirectlyAccess(barrelLocation)) {
-            player.sendMessage(FeedbackType.NO_TARGET_BLOCK.getMessage());
-            return;
-        }
         if (!(barrel instanceof io.github.sefiraat.networks.network.barrel.NetworkStorage)) {
-            player.sendMessage(Lang.getString("messages.unsupported-operation.manager.support_quantum_only"));
-        }
-
-        QuantumCache cache = NetworkQuantumStorage.getCaches().get(barrelLocation);
-        if (cache == null) {
-            player.sendMessage(Lang.getString("messages.unsupported-operation.manager.support_quantum_only"));
+            sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.manager.support_quantum_only"));
             return;
         }
 
-        ItemStack exist = cache.getItemStack();
-        if (exist != null) {
-            player.sendMessage(Lang.getString("messages.unsupported-operation.manager.quantum_storage_not_empty"));
+        final ItemStack cursor = player.getItemOnCursor();
+        if (cursor == null || cursor.getType() == Material.AIR) {
             return;
         }
+        final ItemStack sample = cursor.clone();
 
-        BlockMenu menu = StorageCacheUtils.getMenu(barrel.getLocation());
-        if (menu == null) {
-            return;
-        }
-        NetworkQuantumStorage.setItem(menu, player);
+        runAtTargetRegion(barrelLocation, () -> {
+            QuantumCache cache = NetworkQuantumStorage.getCaches().get(barrelLocation);
+            if (cache == null) {
+                sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.manager.support_quantum_only"));
+                return;
+            }
+
+            ItemStack exist = cache.getItemStack();
+            if (exist != null) {
+                sendPlayerMessage(player, Lang.getString("messages.unsupported-operation.manager.quantum_storage_not_empty"));
+                return;
+            }
+
+            BlockMenu menu = StorageCacheUtils.getMenu(barrel.getLocation());
+            if (menu == null) {
+                return;
+            }
+            NetworkQuantumStorage.setItem(menu, sample, 1);
+        });
     }
 
     public static void openMenu(@NotNull BarrelIdentity barrel, @NotNull Player player) {
-        if (!canDirectlyAccess(barrel.getLocation())) {
-            player.sendMessage(FeedbackType.NO_TARGET_BLOCK.getMessage());
-            return;
-        }
-        BlockMenu menu = StorageCacheUtils.getMenu(barrel.getLocation());
-        if (menu == null) {
-            return;
-        }
+        runAtTargetRegion(barrel.getLocation(), () -> {
+            BlockMenu menu = StorageCacheUtils.getMenu(barrel.getLocation());
+            if (menu == null) {
+                return;
+            }
 
-        FoliaSupport.runPlayer(player, () -> menu.open(player));
+            FoliaSupport.runPlayer(player, () -> menu.open(player));
+        });
     }
 
     public static @NotNull List<BarrelIdentity> getBarrels(@NotNull NetworkRoot root, @NotNull GridCache cache) {
@@ -322,22 +349,28 @@ public class QuantumManager extends NetworkObject {
         player.closeInventory();
         ChatUtils.awaitInput(player, s -> {
             FoliaSupport.runPlayer(player, () -> {
-                StorageCacheUtils.setData(barrelLocation, BS_NAME, s);
+                runAtTargetRegion(barrelLocation, () -> StorageCacheUtils.setData(barrelLocation, BS_NAME, s));
                 player.sendMessage(Lang.getString("messages.completed-operation.manager.set_name"));
-
-                SlimefunBlockData data = StorageCacheUtils.getBlock(blockMenu.getLocation());
-                if (data == null) {
-                    return;
-                }
-
-                if (blockMenu.getPreset().getID().equals(data.getSfId())) {
-                    BlockMenu actualMenu = data.getBlockMenu();
-                    if (actualMenu != null) {
-                        updateDisplay(actualMenu);
-                        actualMenu.open(player);
-                    }
-                }
+                reopenManagerMenu(blockMenu, player);
             });
+        });
+    }
+
+    private void reopenManagerMenu(@NotNull BlockMenu blockMenu, @NotNull Player player) {
+        final Location managerLocation = blockMenu.getLocation();
+        FoliaSupport.runRegion(managerLocation, () -> {
+            SlimefunBlockData data = StorageCacheUtils.getBlock(managerLocation);
+            if (data == null) {
+                return;
+            }
+
+            if (blockMenu.getPreset().getID().equals(data.getSfId())) {
+                BlockMenu actualMenu = data.getBlockMenu();
+                if (actualMenu != null) {
+                    updateDisplay(actualMenu);
+                    FoliaSupport.runPlayer(player, () -> actualMenu.open(player));
+                }
+            }
         });
     }
 
@@ -417,15 +450,13 @@ public class QuantumManager extends NetworkObject {
                 } else if (!isEmpty) {
                     displayStack = new CustomItemStack(
                         displayStack, TextUtil.GRAY + ItemStackHelper.getDisplayName(barrelItemStack));
-                } else if (canDirectlyAccess(barrelLocation)) {
-                    SlimefunItem sf = StorageCacheUtils.getSfItem(barrelLocation);
+                } else {
+                    SlimefunItem sf = callAtTargetRegion(barrelLocation, () -> StorageCacheUtils.getSfItem(barrelLocation));
                     if (sf == null) {
-                        displayStack = new CustomItemStack(displayStack, Sorters.NO_ITEM);
+                        displayStack = new CustomItemStack(displayStack == null ? Icon.UNKNOWN_ITEM : displayStack, Sorters.NO_ITEM);
                     } else {
                         displayStack = sf.getItem().clone();
                     }
-                } else {
-                    displayStack = new CustomItemStack(Icon.UNKNOWN_ITEM, Sorters.NO_ITEM);
                 }
 
                 final ItemMeta itemMeta = displayStack.getItemMeta();

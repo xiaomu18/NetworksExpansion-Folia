@@ -43,6 +43,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class Offsetter extends SpecialSlimefunItem implements AdminDebuggable {
     private static final Map<Location, TransportFacing> facingMap = new ConcurrentHashMap<>();
     private static final Map<Location, Integer> offsetMap = new ConcurrentHashMap<>();
+    private static final Map<Location, Boolean> PENDING_TRANSFERS = new ConcurrentHashMap<>();
     private static final String BS_OFFSET = "offset";
     private static final int OFFSET_DECREASE_SLOT = 3;
     private static final int OFFSET_SHOW_SLOT = 4;
@@ -54,10 +55,6 @@ public class Offsetter extends SpecialSlimefunItem implements AdminDebuggable {
         @NotNull RecipeType recipeType,
         @NotNull ItemStack @NotNull [] recipe) {
         super(itemGroup, item, recipeType, recipe);
-    }
-
-    private static boolean canDirectlyAccess(@NotNull Location location) {
-        return location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location);
     }
 
     private static void onTick(@NotNull Block block) {
@@ -113,35 +110,77 @@ public class Offsetter extends SpecialSlimefunItem implements AdminDebuggable {
         final Block toBlock = block.getRelative(to);
         final Location fromLocation = fromBlock.getLocation();
         final Location toLocation = toBlock.getLocation();
-        if (!canDirectlyAccess(fromLocation) || !canDirectlyAccess(toLocation)) {
+        if (PENDING_TRANSFERS.putIfAbsent(location, Boolean.TRUE) != null) {
             return;
         }
 
-        final BlockMenu fromMenu = StorageCacheUtils.getMenu(fromLocation);
-        final BlockMenu toMenu = StorageCacheUtils.getMenu(toLocation);
-        if (fromMenu == null || toMenu == null) {
-            return;
-        }
-
-        final int[] fromSlot =
-            fromMenu.getPreset().getSlotsAccessedByItemTransport(fromMenu, ItemTransportFlow.WITHDRAW, null);
-        for (int i = 0; i < fromSlot.length; i++) {
-            ItemStack fromItem = fromMenu.getItemInSlot(fromSlot[i]);
-            if (fromItem == null || fromItem.getType() == Material.AIR) {
-                continue;
-            }
-            final int[] toSlot =
-                toMenu.getPreset().getSlotsAccessedByItemTransport(toMenu, ItemTransportFlow.INSERT, fromItem);
-            final int offset = getOffset(location);
-            final int offseti = i + offset;
-            if (offseti >= toSlot.length || offseti < 0) {
-                continue;
+        FoliaSupport.runRegion(fromLocation, () -> {
+            final BlockMenu fromMenu = StorageCacheUtils.getMenu(fromLocation);
+            if (fromMenu == null) {
+                FoliaSupport.runRegion(location, () -> PENDING_TRANSFERS.remove(location));
+                return;
             }
 
-            if (BlockMenuUtil.fits(toMenu, fromItem, toSlot[offseti])) {
-                BlockMenuUtil.pushItem(toMenu, fromItem, toSlot[offseti]);
+            final int[] fromSlots =
+                fromMenu.getPreset().getSlotsAccessedByItemTransport(fromMenu, ItemTransportFlow.WITHDRAW, null);
+            final List<TransferCandidate> candidates = new ArrayList<>();
+            for (int i = 0; i < fromSlots.length; i++) {
+                final int fromSlot = fromSlots[i];
+                final ItemStack fromItem = fromMenu.getItemInSlot(fromSlot);
+                if (fromItem == null || fromItem.getType() == Material.AIR) {
+                    continue;
+                }
+                candidates.add(new TransferCandidate(fromSlot, i, fromItem.clone()));
             }
-        }
+
+            FoliaSupport.runRegion(toLocation, () -> {
+                final BlockMenu toMenu = StorageCacheUtils.getMenu(toLocation);
+                if (toMenu == null) {
+                    FoliaSupport.runRegion(location, () -> PENDING_TRANSFERS.remove(location));
+                    return;
+                }
+
+                final int offset = getOffset(location);
+                final Map<Integer, Integer> movedAmounts = new HashMap<>();
+                for (TransferCandidate candidate : candidates) {
+                    final int[] toSlots = toMenu.getPreset()
+                        .getSlotsAccessedByItemTransport(toMenu, ItemTransportFlow.INSERT, candidate.item().clone());
+                    final int offsetIndex = candidate.relativeIndex() + offset;
+                    if (offsetIndex < 0 || offsetIndex >= toSlots.length) {
+                        continue;
+                    }
+
+                    final int targetSlot = toSlots[offsetIndex];
+                    final ItemStack transfer = candidate.item().clone();
+                    final int originalAmount = transfer.getAmount();
+                    if (!BlockMenuUtil.fits(toMenu, transfer, targetSlot)) {
+                        continue;
+                    }
+
+                    BlockMenuUtil.pushItem(toMenu, transfer, targetSlot);
+                    final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                    if (moved > 0) {
+                        movedAmounts.put(candidate.fromSlot(), moved);
+                    }
+                }
+
+                FoliaSupport.runRegion(fromLocation, () -> {
+                    final BlockMenu liveFromMenu = StorageCacheUtils.getMenu(fromLocation);
+                    if (liveFromMenu != null) {
+                        for (Map.Entry<Integer, Integer> entry : movedAmounts.entrySet()) {
+                            final ItemStack live = liveFromMenu.getItemInSlot(entry.getKey());
+                            if (live != null && live.getType() != Material.AIR) {
+                                live.setAmount(Math.max(0, live.getAmount() - entry.getValue()));
+                            }
+                        }
+                    }
+                    FoliaSupport.runRegion(location, () -> PENDING_TRANSFERS.remove(location));
+                });
+            });
+        });
+    }
+
+    private record TransferCandidate(int fromSlot, int relativeIndex, @NotNull ItemStack item) {
     }
 
     private static void increaseOffset(@NotNull Location location, int amount) {

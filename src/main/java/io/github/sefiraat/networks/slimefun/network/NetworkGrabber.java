@@ -61,51 +61,50 @@ public class NetworkGrabber extends NetworkDirectional implements SoftCellBannab
 
         final BlockFace direction = this.getCurrentDirection(blockMenu);
         final Block targetBlock = blockMenu.getBlock().getRelative(direction);
-        if (!canDirectlyAccess(targetBlock.getLocation())) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-        final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetBlock.getLocation());
-
-        if (targetMenu == null) {
-            sendFeedback(blockMenu.getLocation(), FeedbackType.NO_TARGET_BLOCK);
-            return;
-        }
-
-        int[] slots =
-            targetMenu.getPreset().getSlotsAccessedByItemTransport(targetMenu, ItemTransportFlow.WITHDRAW, null);
-
-        for (int slot : slots) {
-            final ItemStack itemStack = targetMenu.getItemInSlot(slot);
-
-            if (itemStack != null && itemStack.getType() != Material.AIR) {
-                if (!PENDING_GRABS.add(menuLocation)) {
-                    return;
-                }
-
-                final int targetSlot = slot;
-                final ItemStack transfer = itemStack.clone();
-                final int originalAmount = transfer.getAmount();
-                root.addItemStack0Async(menuLocation, transfer).whenComplete((ignored, throwable) ->
-                    FoliaSupport.runRegion(targetMenu.getLocation(), () -> {
-                        final int moved = Math.max(0, originalAmount - transfer.getAmount());
-                        if (moved > 0) {
-                            final ItemStack live = targetMenu.getItemInSlot(targetSlot);
-                            if (live != null && live.getType() != Material.AIR) {
-                                live.setAmount(Math.max(0, live.getAmount() - moved));
-                            }
-                        }
-                        FoliaSupport.runRegion(menuLocation, () -> {
-                            PENDING_GRABS.remove(menuLocation);
-                            sendFeedback(menuLocation, FeedbackType.WORKING);
-                            if (root.isDisplayParticles() && moved > 0) {
-                                showParticle(menuLocation, direction);
-                            }
-                        });
-                    }));
+        final org.bukkit.Location targetLocation = targetBlock.getLocation();
+        FoliaSupport.runRegion(targetLocation, () -> {
+            final BlockMenu targetMenu = StorageCacheUtils.getMenu(targetLocation);
+            if (targetMenu == null) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.NO_TARGET_BLOCK));
                 return;
             }
-        }
+
+            int[] slots =
+                targetMenu.getPreset().getSlotsAccessedByItemTransport(targetMenu, ItemTransportFlow.WITHDRAW, null);
+
+            for (int slot : slots) {
+                final ItemStack itemStack = targetMenu.getItemInSlot(slot);
+
+                if (itemStack != null && itemStack.getType() != Material.AIR) {
+                    if (!PENDING_GRABS.add(menuLocation)) {
+                        return;
+                    }
+
+                    final int targetSlot = slot;
+                    final ItemStack transfer = itemStack.clone();
+                    final int originalAmount = transfer.getAmount();
+                    root.addItemStack0Async(menuLocation, transfer).whenComplete((ignored, throwable) ->
+                        FoliaSupport.runRegion(targetLocation, () -> {
+                            final BlockMenu liveTargetMenu = StorageCacheUtils.getMenu(targetLocation);
+                            final int moved = Math.max(0, originalAmount - transfer.getAmount());
+                            if (moved > 0 && liveTargetMenu != null) {
+                                final ItemStack live = liveTargetMenu.getItemInSlot(targetSlot);
+                                if (live != null && live.getType() != Material.AIR) {
+                                    live.setAmount(Math.max(0, live.getAmount() - moved));
+                                }
+                            }
+                            FoliaSupport.runRegion(menuLocation, () -> {
+                                PENDING_GRABS.remove(menuLocation);
+                                sendFeedback(menuLocation, FeedbackType.WORKING);
+                                if (root.isDisplayParticles() && moved > 0) {
+                                    showParticle(menuLocation, direction);
+                                }
+                            });
+                        }));
+                    return;
+                }
+            }
+        });
     }
 
     @Override

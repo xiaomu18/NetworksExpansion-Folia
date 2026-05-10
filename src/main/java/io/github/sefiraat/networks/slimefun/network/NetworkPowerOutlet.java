@@ -18,6 +18,7 @@ import org.bukkit.block.BlockFace;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 
 public class NetworkPowerOutlet extends NetworkDirectional {
 
@@ -50,44 +51,6 @@ public class NetworkPowerOutlet extends NetworkDirectional {
 
         final BlockFace blockFace = getCurrentDirection(menu);
         final Block targetBlock = b.getRelative(blockFace);
-        if (!canDirectlyAccess(targetBlock.getLocation())) {
-            sendFeedback(menu.getLocation(), FeedbackType.INVALID_BLOCK);
-            return;
-        }
-
-        SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetBlock.getLocation());
-        if (blockData == null) {
-            sendFeedback(menu.getLocation(), FeedbackType.INVALID_BLOCK);
-            return;
-        }
-
-        if (!blockData.isDataLoaded()) {
-            StorageCacheUtils.requestLoad(blockData);
-            sendFeedback(menu.getLocation(), FeedbackType.LOADING_DATA);
-            return;
-        }
-
-        final SlimefunItem slimefunItem = SlimefunItem.getById(blockData.getSfId());
-        if (!(slimefunItem instanceof EnergyNetComponent component) || slimefunItem instanceof NetworkObject) {
-            sendFeedback(menu.getLocation(), FeedbackType.CANNOT_OUTPUT_ENERGY);
-            return;
-        }
-
-        final String charge = blockData.getData("energy-charge");
-        int chargeInt = 0;
-        if (charge != null) {
-            chargeInt = Integer.parseInt(charge);
-        }
-
-        final int capacity = component.getCapacity();
-        final int space = capacity - chargeInt;
-
-        if (space <= 0) {
-            sendFeedback(menu.getLocation(), FeedbackType.FULL_ENERGY_BUFFER);
-            return;
-        }
-
-        final int possibleGeneration = Math.min(rate, space);
         final NetworkRoot root = definition.getNode().getRoot();
         final long power = root.getRootPower();
 
@@ -96,10 +59,46 @@ public class NetworkPowerOutlet extends NetworkDirectional {
             return;
         }
 
-        final int gen = power < possibleGeneration ? (int) power : possibleGeneration;
+        final org.bukkit.Location menuLocation = menu.getLocation();
+        final org.bukkit.Location targetLocation = targetBlock.getLocation();
+        FoliaSupport.runRegion(targetLocation, () -> {
+            SlimefunBlockData blockData = StorageCacheUtils.getBlock(targetLocation);
+            if (blockData == null) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.INVALID_BLOCK));
+                return;
+            }
 
-        component.addCharge(targetBlock.getLocation(), gen);
-        root.removeRootPower(gen);
-        sendFeedback(menu.getLocation(), FeedbackType.WORKING);
+            if (!blockData.isDataLoaded()) {
+                StorageCacheUtils.requestLoad(blockData);
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.LOADING_DATA));
+                return;
+            }
+
+            final SlimefunItem slimefunItem = SlimefunItem.getById(blockData.getSfId());
+            if (!(slimefunItem instanceof EnergyNetComponent component) || slimefunItem instanceof NetworkObject) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.CANNOT_OUTPUT_ENERGY));
+                return;
+            }
+
+            final String charge = blockData.getData("energy-charge");
+            int chargeInt = 0;
+            if (charge != null) {
+                chargeInt = Integer.parseInt(charge);
+            }
+
+            final int capacity = component.getCapacity();
+            final int space = capacity - chargeInt;
+
+            if (space <= 0) {
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.FULL_ENERGY_BUFFER));
+                return;
+            }
+
+            final int possibleGeneration = Math.min(rate, space);
+            final int gen = power < possibleGeneration ? (int) power : possibleGeneration;
+            component.addCharge(targetLocation, gen);
+            root.removeRootPowerAsync(gen).whenComplete((ignored, throwable) ->
+                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.WORKING)));
+        });
     }
 }

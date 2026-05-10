@@ -55,6 +55,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 @SuppressWarnings("deprecation")
 public class NetworkRoot extends NetworkNode {
@@ -210,7 +211,7 @@ public class NetworkRoot extends NetworkNode {
 
     @Setter
     @Getter
-    private long rootPower = 0;
+    private volatile long rootPower = 0;
 
     @Setter
     @Getter
@@ -585,41 +586,58 @@ public class NetworkRoot extends NetworkNode {
         }
     }
 
-    private boolean canDirectlyAccess(@Nullable Location location) {
-        return location != null && (location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location));
+    private @NotNull Location getOwnerLocation() {
+        return this.controller != null ? this.controller : this.nodePosition;
+    }
+
+    private <T> T callOnOwningRegion(@NotNull Supplier<T> supplier) {
+        final Location ownerLocation = getOwnerLocation();
+        if (ownerLocation.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(ownerLocation)) {
+            return supplier.get();
+        }
+
+        return FoliaSupport.supplyRegion(ownerLocation, supplier).join();
+    }
+
+    private void runOnOwningRegion(@NotNull Runnable runnable) {
+        callOnOwningRegion(() -> {
+            runnable.run();
+            return null;
+        });
+    }
+
+    private <T> @Nullable T callOnLocationRegion(@Nullable Location location, @NotNull Supplier<T> supplier) {
+        if (location == null) {
+            return null;
+        }
+
+        if (location.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(location)) {
+            return supplier.get();
+        }
+
+        return FoliaSupport.supplyRegion(location, supplier).join();
     }
 
     @Nullable
     private Location getAccessibleMonitorTarget(@Nullable Location monitorLocation) {
-        if (!canDirectlyAccess(monitorLocation)) {
-            return null;
-        }
+        return callOnLocationRegion(monitorLocation, () -> {
+            final BlockFace face = NetworkDirectional.getSelectedFace(monitorLocation);
+            if (face == null) {
+                return null;
+            }
 
-        final BlockFace face = NetworkDirectional.getSelectedFace(monitorLocation);
-        if (face == null) {
-            return null;
-        }
-
-        final Location targetLocation = monitorLocation.clone().add(face.getDirection());
-        return canDirectlyAccess(targetLocation) ? targetLocation : null;
+            return monitorLocation.clone().add(face.getDirection());
+        });
     }
 
     @Nullable
     private SlimefunItem getAccessibleSfItem(@Nullable Location location) {
-        if (!canDirectlyAccess(location)) {
-            return null;
-        }
-
-        return StorageCacheUtils.getSfItem(location);
+        return callOnLocationRegion(location, () -> StorageCacheUtils.getSfItem(location));
     }
 
     @Nullable
     private BlockMenu getAccessibleMenu(@Nullable Location location) {
-        if (!canDirectlyAccess(location)) {
-            return null;
-        }
-
-        return StorageCacheUtils.getMenu(location);
+        return callOnLocationRegion(location, () -> StorageCacheUtils.getMenu(location));
     }
 
     private static void addLongAmount(@NotNull Map<ItemStack, Long> itemStacks, @Nullable ItemStack itemStack, long amount) {
@@ -1332,6 +1350,12 @@ public class NetworkRoot extends NetworkNode {
     @Deprecated
     @NotNull
     public Set<BarrelIdentity> getBarrels() {
+        return callOnOwningRegion(this::getBarrelsNow);
+    }
+
+    @Deprecated
+    @NotNull
+    private Set<BarrelIdentity> getBarrelsNow() {
         requireOwningRegion();
 
         if (this.barrels != null) {
@@ -1395,6 +1419,12 @@ public class NetworkRoot extends NetworkNode {
     @Deprecated
     @NotNull
     public Map<StorageUnitData, Location> getCargoStorageUnitDatas() {
+        return callOnOwningRegion(this::getCargoStorageUnitDatasNow);
+    }
+
+    @Deprecated
+    @NotNull
+    private Map<StorageUnitData, Location> getCargoStorageUnitDatasNow() {
         requireOwningRegion();
         if (this.cargoStorageUnitDatas != null) {
             return this.cargoStorageUnitDatas;
@@ -1432,6 +1462,11 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public Set<BlockMenu> getCellMenus() {
+        return callOnOwningRegion(this::getCellMenusNow);
+    }
+
+    @NotNull
+    private Set<BlockMenu> getCellMenusNow() {
         requireOwningRegion();
         final Set<BlockMenu> menus = new HashSet<>();
         for (Location cellLocation : this.cells) {
@@ -1445,6 +1480,11 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public Set<BlockMenu> getCrafterOutputs() {
+        return callOnOwningRegion(this::getCrafterOutputsNow);
+    }
+
+    @NotNull
+    private Set<BlockMenu> getCrafterOutputsNow() {
         requireOwningRegion();
         final Set<BlockMenu> menus = new HashSet<>();
         for (Location location : this.crafters) {
@@ -1458,6 +1498,11 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public Set<BlockMenu> getGreedyBlockMenus() {
+        return callOnOwningRegion(this::getGreedyBlockMenusNow);
+    }
+
+    @NotNull
+    private Set<BlockMenu> getGreedyBlockMenusNow() {
         requireOwningRegion();
         final Set<BlockMenu> menus = new HashSet<>();
         for (Location location : this.greedyBlocks) {
@@ -1471,6 +1516,11 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public Set<BlockMenu> getAdvancedGreedyBlockMenus() {
+        return callOnOwningRegion(this::getAdvancedGreedyBlockMenusNow);
+    }
+
+    @NotNull
+    private Set<BlockMenu> getAdvancedGreedyBlockMenusNow() {
         requireOwningRegion();
         final Set<BlockMenu> menus = new HashSet<>();
         for (Location location : this.advancedGreedyBlocks) {
@@ -1676,11 +1726,14 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public boolean contains(@NotNull ItemStack itemStack) {
-        requireOwningRegion();
-        return contains(new ItemRequest(itemStack, 1));
+        return callOnOwningRegion(() -> containsNow(new ItemRequest(itemStack, 1)));
     }
 
     public boolean contains(@NotNull ItemRequest request) {
+        return callOnOwningRegion(() -> containsNow(request));
+    }
+
+    private boolean containsNow(@NotNull ItemRequest request) {
         requireOwningRegion();
 
         long found = 0;
@@ -1809,6 +1862,10 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public int getAmount(@NotNull ItemStack itemStack) {
+        return callOnOwningRegion(() -> getAmountNow(itemStack));
+    }
+
+    private int getAmountNow(@NotNull ItemStack itemStack) {
         requireOwningRegion();
         long totalAmount = 0;
         for (BlockMenu blockMenu : getAdvancedGreedyBlockMenus()) {
@@ -1864,6 +1921,10 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public @NotNull HashMap<ItemStack, Long> getAmount(@NotNull Set<ItemStack> itemStacks) {
+        return callOnOwningRegion(() -> getAmountsNow(itemStacks));
+    }
+
+    private @NotNull HashMap<ItemStack, Long> getAmountsNow(@NotNull Set<ItemStack> itemStacks) {
         requireOwningRegion();
         HashMap<ItemStack, Long> totalAmounts = new HashMap<>();
         for (BlockMenu menu : getAdvancedGreedyBlockMenus()) {
@@ -2008,6 +2069,11 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public void removeRootPower(long power) {
+        runOnOwningRegion(() -> removeRootPowerNow(power));
+    }
+
+    private void removeRootPowerNow(long power) {
+        requireOwningRegion();
         if (power <= 0) {
             return;
         }
@@ -2022,13 +2088,60 @@ public class NetworkRoot extends NetworkNode {
                 }
                 final int toRemove = (int) Math.min(power - removed, charge);
                 powerNode.removeCharge(node, toRemove);
-                this.rootPower -= power;
+                this.rootPower -= toRemove;
                 removed = removed + toRemove;
             }
             if (removed >= power) {
                 return;
             }
         }
+    }
+
+    public @NotNull CompletableFuture<Void> removeRootPowerAsync(long power) {
+        if (power <= 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        final List<Location> nodes = new ArrayList<>(powerNodes);
+        final Location ownerLocation = getOwnerLocation();
+        final long[] remaining = {power};
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+
+        for (Location node : nodes) {
+            chain = chain.thenCompose(ignored -> {
+                if (remaining[0] <= 0) {
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                return FoliaSupport.supplyRegion(node, () -> {
+                    final SlimefunItem item = StorageCacheUtils.getSfItem(node);
+                    if (!(item instanceof NetworkPowerNode powerNode)) {
+                        return 0;
+                    }
+
+                    final int charge = powerNode.getCharge(node);
+                    if (charge <= 0) {
+                        return 0;
+                    }
+
+                    final int toRemove = (int) Math.min(remaining[0], charge);
+                    powerNode.removeCharge(node, toRemove);
+                    return toRemove;
+                }).thenCompose(removed -> {
+                    if (removed <= 0) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    remaining[0] -= removed;
+                    return FoliaSupport.supplyRegion(ownerLocation, () -> {
+                        this.rootPower -= removed;
+                        return null;
+                    });
+                });
+            });
+        }
+
+        return chain;
     }
 
     @Warning(
@@ -2096,6 +2209,14 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public List<BarrelIdentity> getBarrels(
+        @NotNull Predicate<BarrelIdentity> filter,
+        NetworkRootLocateStorageEvent.Strategy strategy,
+        boolean includeEmpty) {
+        return callOnOwningRegion(() -> getBarrelsNow(filter, strategy, includeEmpty));
+    }
+
+    @NotNull
+    private List<BarrelIdentity> getBarrelsNow(
         @NotNull Predicate<BarrelIdentity> filter,
         NetworkRootLocateStorageEvent.Strategy strategy,
         boolean includeEmpty) {
@@ -2169,6 +2290,12 @@ public class NetworkRoot extends NetworkNode {
     @NotNull
     public Map<StorageUnitData, Location> getCargoStorageUnitDatas(
         NetworkRootLocateStorageEvent.Strategy strategy, boolean includeEmpty) {
+        return callOnOwningRegion(() -> getCargoStorageUnitDatasNow(strategy, includeEmpty));
+    }
+
+    @NotNull
+    private Map<StorageUnitData, Location> getCargoStorageUnitDatasNow(
+        NetworkRootLocateStorageEvent.Strategy strategy, boolean includeEmpty) {
         requireOwningRegion();
         final Set<Location> addedLocations = ConcurrentHashMap.newKeySet();
         final Map<StorageUnitData, Location> dataSet = new HashMap<>();
@@ -2205,6 +2332,11 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public Set<BarrelIdentity> getInputAbleBarrels() {
+        return callOnOwningRegion(this::getInputAbleBarrelsNow);
+    }
+
+    @NotNull
+    private Set<BarrelIdentity> getInputAbleBarrelsNow() {
         requireOwningRegion();
         if (this.inputAbleBarrels != null) {
             return this.inputAbleBarrels;
@@ -2276,6 +2408,11 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public Set<BarrelIdentity> getOutputAbleBarrels() {
+        return callOnOwningRegion(this::getOutputAbleBarrelsNow);
+    }
+
+    @NotNull
+    private Set<BarrelIdentity> getOutputAbleBarrelsNow() {
         requireOwningRegion();
 
         if (this.outputAbleBarrels != null) {
@@ -2348,6 +2485,11 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public Map<StorageUnitData, Location> getInputAbleCargoStorageUnitDatas() {
+        return callOnOwningRegion(this::getInputAbleCargoStorageUnitDatasNow);
+    }
+
+    @NotNull
+    private Map<StorageUnitData, Location> getInputAbleCargoStorageUnitDatasNow() {
         requireOwningRegion();
         if (this.inputAbleCargoStorageUnitDatas != null) {
             return this.inputAbleCargoStorageUnitDatas;
@@ -2392,6 +2534,11 @@ public class NetworkRoot extends NetworkNode {
 
     @NotNull
     public Map<StorageUnitData, Location> getOutputAbleCargoStorageUnitDatas() {
+        return callOnOwningRegion(this::getOutputAbleCargoStorageUnitDatasNow);
+    }
+
+    @NotNull
+    private Map<StorageUnitData, Location> getOutputAbleCargoStorageUnitDatasNow() {
         requireOwningRegion();
         if (this.outputAbleCargoStorageUnitDatas != null) {
             return this.outputAbleCargoStorageUnitDatas;
@@ -2452,11 +2599,15 @@ public class NetworkRoot extends NetworkNode {
     }
 
     private boolean isOnOwningRegionThread() {
-        Location ownerLocation = this.controller != null ? this.controller : this.nodePosition;
+        Location ownerLocation = getOwnerLocation();
         return ownerLocation.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(ownerLocation);
     }
 
     public boolean refreshRootItems() {
+        return callOnOwningRegion(this::refreshRootItemsNow);
+    }
+
+    private boolean refreshRootItemsNow() {
         requireOwningRegion();
         this.barrels = null;
         this.cargoStorageUnitDatas = null;
@@ -2475,12 +2626,12 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public @NotNull CompletableFuture<Boolean> refreshRootItemsAsync() {
-        final Location ownerLocation = this.controller != null ? this.controller : this.nodePosition;
-        if (ownerLocation.getWorld() == null) {
-            return CompletableFuture.completedFuture(refreshRootItems());
+        final Location ownerLocation = getOwnerLocation();
+        if (ownerLocation.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(ownerLocation)) {
+            return CompletableFuture.completedFuture(refreshRootItemsNow());
         }
 
-        return FoliaSupport.supplyRegion(ownerLocation, this::refreshRootItems);
+        return FoliaSupport.supplyRegion(ownerLocation, this::refreshRootItemsNow);
     }
 
     @Nullable
@@ -2515,14 +2666,14 @@ public class NetworkRoot extends NetworkNode {
 
     @Nullable
     public ItemStack requestItem(@NotNull Location accessor, @NotNull ItemRequest request) {
-        requireOwningRegion();
-        return getItemStack0(accessor, request);
+        return callOnOwningRegion(() -> getItemStack0Now(accessor, request));
     }
 
     @Nullable
     public ItemStack requestItem(@NotNull Location accessor, @NotNull ItemStack itemStack) {
-        requireOwningRegion();
-        return requestItem(accessor, new ItemRequest(itemStack, itemStack.getAmount()));
+        return callOnOwningRegion(() -> getItemStack0Now(
+            accessor,
+            new ItemRequest(itemStack, itemStack.getAmount())));
     }
 
     @NotNull
@@ -2546,6 +2697,10 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public ItemStack getItemStack0(@NotNull Location accessor, @NotNull ItemRequest request) {
+        return callOnOwningRegion(() -> getItemStack0Now(accessor, request));
+    }
+
+    private ItemStack getItemStack0Now(@NotNull Location accessor, @NotNull ItemRequest request) {
         requireOwningRegion();
         ItemStack stackToReturn = null;
 
@@ -2902,20 +3057,19 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public void addItem(@NotNull Location accessor, @NotNull ItemStack incoming) {
-        requireOwningRegion();
-        addItemStack0(accessor, incoming);
+        runOnOwningRegion(() -> addItemStack0Now(accessor, incoming));
     }
 
     @NotNull
     public CompletableFuture<Void> addItemStack0Async(@NotNull Location accessor, @NotNull ItemStack incoming) {
-        final Location ownerLocation = this.controller != null ? this.controller : this.nodePosition;
+        final Location ownerLocation = getOwnerLocation();
         if (ownerLocation.getWorld() == null || FoliaSupport.isOwnedByCurrentRegion(ownerLocation)) {
-            addItemStack0(accessor, incoming);
+            addItemStack0Now(accessor, incoming);
             return CompletableFuture.completedFuture(null);
         }
 
         return FoliaSupport.supplyRegion(ownerLocation, () -> {
-            addItemStack0(accessor, incoming);
+            addItemStack0Now(accessor, incoming);
             return null;
         });
     }
@@ -2927,6 +3081,10 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public void addItemStack0(@NotNull Location accessor, @NotNull ItemStack incoming) {
+        runOnOwningRegion(() -> addItemStack0Now(accessor, incoming));
+    }
+
+    private void addItemStack0Now(@NotNull Location accessor, @NotNull ItemStack incoming) {
         requireOwningRegion();
         if (!allowAccessInput(accessor)) {
             FeedbackSendable.sendFeedback0(accessor, FeedbackType.ROOT_LIMITING_ACCESS_INPUT);
