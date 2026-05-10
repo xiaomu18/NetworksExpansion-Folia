@@ -70,6 +70,9 @@ public class NetworkRoot extends NetworkNode {
     private record OutputSource(@NotNull Location location, @NotNull OutputSourceType type) {
     }
 
+    private record OutputTakePlan(@NotNull OutputSource source, int amount) {
+    }
+
     public static final int persistentThreshold = Networks.getConfigManager().getPersistentThreshold();
     public static final int cacheMissThreshold = Networks.getConfigManager().getCacheMissThreshold();
     public static final int reduceMs = Networks.getConfigManager().getReduceMs();
@@ -796,6 +799,76 @@ public class NetworkRoot extends NetworkNode {
         };
     }
 
+    private long getAvailableAmountFromMenu(
+        @NotNull Location location,
+        @NotNull ItemRequest request) {
+        BlockMenu blockMenu = StorageCacheUtils.getMenu(location);
+        if (blockMenu == null) {
+            return 0;
+        }
+
+        int[] slots = blockMenu.getPreset().getSlotsAccessedByItemTransport(ItemTransportFlow.WITHDRAW);
+        long available = 0;
+        for (int slot : slots) {
+            ItemStack itemStack = blockMenu.getItemInSlot(slot);
+            if (itemStack == null || itemStack.getType() == Material.AIR || !StackUtils.itemsMatch(request, itemStack)) {
+                continue;
+            }
+
+            available += itemStack.getAmount();
+            if (available >= request.getAmount()) {
+                return request.getAmount();
+            }
+        }
+
+        return available;
+    }
+
+    private long getAvailableAmountFromOutputSource(
+        @NotNull Location accessor,
+        @NotNull OutputSource source,
+        @NotNull ItemRequest request) {
+        return switch (source.type()) {
+            case MONITOR_TARGET -> {
+                BarrelIdentity barrelIdentity = getBarrel(source.location(), true);
+                if (barrelIdentity != null) {
+                    ItemStack itemStack = barrelIdentity.getItemStack();
+                    if (itemStack == null || !StackUtils.itemsMatch(request, itemStack)) {
+                        yield 0;
+                    }
+
+                    long amount = barrelIdentity.getAmount();
+                    if (barrelIdentity instanceof InfinityBarrel) {
+                        amount = Math.max(0, amount - 1);
+                    }
+                    yield Math.min(request.getAmount(), amount);
+                }
+
+                StorageUnitData data = getCargoStorageUnitData(source.location());
+                if (data == null) {
+                    yield 0;
+                }
+
+                long available = 0;
+                for (ItemContainer itemContainer : data.getStoredItems()) {
+                    if (!StackUtils.itemsMatch(request, itemContainer.getSample())) {
+                        continue;
+                    }
+
+                    available += itemContainer.getAmount();
+                    if (available >= request.getAmount()) {
+                        yield request.getAmount();
+                    }
+                }
+                yield available;
+            }
+            case CELL -> getAvailableAmountFromMenu(source.location(), request);
+            case CRAFTER -> getAvailableAmountFromMenu(source.location(), request);
+            case ADVANCED_GREEDY -> getAvailableAmountFromMenu(source.location(), request);
+            case GREEDY -> getAvailableAmountFromMenu(source.location(), request);
+        };
+    }
+
     @NotNull
     private Map<ItemStack, Long> collectWithdrawMenuItems(@NotNull Location location) {
         Map<ItemStack, Long> itemStacks = new HashMap<>();
@@ -870,7 +943,10 @@ public class NetworkRoot extends NetworkNode {
     @NotNull
     public CompletableFuture<Map<ItemStack, Long>> getAllNetworkItemsLongTypeAsync() {
         Set<Location> monitorTargets = new HashSet<>();
-        for (Location monitorLocation : new HashSet<>(this.monitors)) {
+        Set<Location> monitorLocations = new HashSet<>();
+        monitorLocations.addAll(this.monitors);
+        monitorLocations.addAll(this.outputOnlyMonitors);
+        for (Location monitorLocation : monitorLocations) {
             BlockFace face = NetworkDirectional.getSelectedFace(monitorLocation);
             if (face == null) {
                 continue;
@@ -1023,37 +1099,73 @@ public class NetworkRoot extends NetworkNode {
         }
 
         final ItemStack[] stackToReturn = new ItemStack[1];
-        final int[] remaining = new int[]{request.getAmount()};
-        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+        final List<OutputSource> sources = getOutputSources().stream()
+            .filter(source -> source.location().getWorld() != null)
+            .toList();
 
-        for (OutputSource source : getOutputSources()) {
-            chain = chain.thenCompose(ignored -> {
-                if (remaining[0] <= 0 || source.location().getWorld() == null) {
-                    return CompletableFuture.completedFuture(null);
-                }
-
-                ItemRequest localRequest = new ItemRequest(request.getItemStack(), remaining[0]);
-                return FoliaSupport.supplyRegion(
-                        source.location(),
-                        () -> takeFromOutputSource(accessor, source, localRequest)
-                    )
-                    .exceptionally(throwable -> null)
-                    .thenAccept(fetched -> {
-                        if (fetched == null || fetched.getType() == Material.AIR) {
-                            return;
-                        }
-
-                        if (stackToReturn[0] == null) {
-                            stackToReturn[0] = fetched.clone();
-                        } else {
-                            stackToReturn[0].setAmount(stackToReturn[0].getAmount() + fetched.getAmount());
-                        }
-                        remaining[0] = Math.max(0, remaining[0] - fetched.getAmount());
-                    });
-            });
+        if (sources.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
         }
 
-        return chain.thenApply(ignored -> {
+        final List<CompletableFuture<Long>> availabilityFutures = new ArrayList<>();
+        for (OutputSource source : sources) {
+            ItemRequest localRequest = new ItemRequest(request.getItemStack(), request.getAmount());
+            availabilityFutures.add(
+                FoliaSupport.supplyRegion(
+                        source.location(),
+                        () -> getAvailableAmountFromOutputSource(accessor, source, localRequest)
+                    )
+                    .exceptionally(throwable -> 0L)
+            );
+        }
+
+        return CompletableFuture.allOf(availabilityFutures.toArray(CompletableFuture[]::new))
+            .thenCompose(ignored -> {
+                int remaining = request.getAmount();
+                List<OutputTakePlan> plans = new ArrayList<>();
+                for (int i = 0; i < sources.size(); i++) {
+                    if (remaining <= 0) {
+                        break;
+                    }
+
+                    long availableLong = availabilityFutures.get(i).join();
+                    if (availableLong <= 0) {
+                        continue;
+                    }
+
+                    int plannedAmount = (int) Math.min(remaining, Math.min(Integer.MAX_VALUE, availableLong));
+                    if (plannedAmount <= 0) {
+                        continue;
+                    }
+
+                    plans.add(new OutputTakePlan(sources.get(i), plannedAmount));
+                    remaining -= plannedAmount;
+                }
+
+                CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+                for (OutputTakePlan plan : plans) {
+                    chain = chain.thenCompose(unused -> {
+                        ItemRequest localRequest = new ItemRequest(request.getItemStack(), plan.amount());
+                        return FoliaSupport.supplyRegion(
+                                plan.source().location(),
+                                () -> takeFromOutputSource(accessor, plan.source(), localRequest)
+                            )
+                            .exceptionally(throwable -> null)
+                            .thenAccept(fetched -> {
+                                if (fetched == null || fetched.getType() == Material.AIR) {
+                                    return;
+                                }
+
+                                if (stackToReturn[0] == null) {
+                                    stackToReturn[0] = fetched.clone();
+                                } else {
+                                    stackToReturn[0].setAmount(stackToReturn[0].getAmount() + fetched.getAmount());
+                                }
+                            });
+                    });
+                }
+                return chain;
+            }).thenApply(ignored -> {
             if (stackToReturn[0] == null || stackToReturn[0].getAmount() <= 0) {
                 return null;
             }
@@ -2068,14 +2180,18 @@ public class NetworkRoot extends NetworkNode {
         this.rootPower += power;
     }
 
-    public void removeRootPower(long power) {
-        runOnOwningRegion(() -> removeRootPowerNow(power));
+    public boolean tryRemoveRootPower(long power) {
+        return callOnOwningRegion(() -> tryRemoveRootPowerNow(power));
     }
 
-    private void removeRootPowerNow(long power) {
+    public void removeRootPower(long power) {
+        runOnOwningRegion(() -> tryRemoveRootPowerNow(power));
+    }
+
+    private int drainReservedRootPowerNow(long power) {
         requireOwningRegion();
         if (power <= 0) {
-            return;
+            return 0;
         }
 
         int removed = 0;
@@ -2088,60 +2204,98 @@ public class NetworkRoot extends NetworkNode {
                 }
                 final int toRemove = (int) Math.min(power - removed, charge);
                 powerNode.removeCharge(node, toRemove);
-                this.rootPower -= toRemove;
                 removed = removed + toRemove;
             }
             if (removed >= power) {
-                return;
+                return removed;
             }
         }
+        return removed;
+    }
+
+    private boolean tryRemoveRootPowerNow(long power) {
+        requireOwningRegion();
+        if (power <= 0) {
+            return true;
+        }
+
+        if (this.rootPower < power) {
+            return false;
+        }
+
+        this.rootPower -= power;
+        int removed = drainReservedRootPowerNow(power);
+        if (removed < power) {
+            this.rootPower += power - removed;
+            return false;
+        }
+
+        return true;
     }
 
     public @NotNull CompletableFuture<Void> removeRootPowerAsync(long power) {
+        return tryRemoveRootPowerAsync(power).thenAccept(ignored -> {
+        });
+    }
+
+    public @NotNull CompletableFuture<Boolean> tryRemoveRootPowerAsync(long power) {
         if (power <= 0) {
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(true);
         }
 
-        final List<Location> nodes = new ArrayList<>(powerNodes);
         final Location ownerLocation = getOwnerLocation();
-        final long[] remaining = {power};
-        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+        return FoliaSupport.supplyRegion(ownerLocation, () -> {
+            if (this.rootPower < power) {
+                return false;
+            }
 
-        for (Location node : nodes) {
-            chain = chain.thenCompose(ignored -> {
-                if (remaining[0] <= 0) {
-                    return CompletableFuture.completedFuture(null);
-                }
+            this.rootPower -= power;
+            return true;
+        }).thenCompose(reserved -> {
+            if (!reserved) {
+                return CompletableFuture.completedFuture(false);
+            }
 
-                return FoliaSupport.supplyRegion(node, () -> {
-                    final SlimefunItem item = StorageCacheUtils.getSfItem(node);
-                    if (!(item instanceof NetworkPowerNode powerNode)) {
-                        return 0;
-                    }
+            final List<Location> nodes = new ArrayList<>(powerNodes);
+            final long[] remaining = {power};
+            CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
 
-                    final int charge = powerNode.getCharge(node);
-                    if (charge <= 0) {
-                        return 0;
-                    }
-
-                    final int toRemove = (int) Math.min(remaining[0], charge);
-                    powerNode.removeCharge(node, toRemove);
-                    return toRemove;
-                }).thenCompose(removed -> {
-                    if (removed <= 0) {
+            for (Location node : nodes) {
+                chain = chain.thenCompose(ignored -> {
+                    if (remaining[0] <= 0) {
                         return CompletableFuture.completedFuture(null);
                     }
 
-                    remaining[0] -= removed;
-                    return FoliaSupport.supplyRegion(ownerLocation, () -> {
-                        this.rootPower -= removed;
-                        return null;
-                    });
+                    return FoliaSupport.supplyRegion(node, () -> {
+                        final SlimefunItem item = StorageCacheUtils.getSfItem(node);
+                        if (!(item instanceof NetworkPowerNode powerNode)) {
+                            return 0;
+                        }
+
+                        final int charge = powerNode.getCharge(node);
+                        if (charge <= 0) {
+                            return 0;
+                        }
+
+                        final int toRemove = (int) Math.min(remaining[0], charge);
+                        powerNode.removeCharge(node, toRemove);
+                        return toRemove;
+                    }).thenAccept(removed -> remaining[0] -= removed);
+                });
+            }
+
+            return chain.thenCompose(ignored -> {
+                if (remaining[0] <= 0) {
+                    return CompletableFuture.completedFuture(true);
+                }
+
+                final long refund = remaining[0];
+                return FoliaSupport.supplyRegion(ownerLocation, () -> {
+                    this.rootPower += refund;
+                    return false;
                 });
             });
-        }
-
-        return chain;
+        });
     }
 
     @Warning(

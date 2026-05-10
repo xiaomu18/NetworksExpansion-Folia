@@ -11,6 +11,7 @@ import com.balugaq.netex.api.interfaces.SoftCellBannable;
 import com.balugaq.netex.api.interfaces.VanillaTransfer;
 import com.balugaq.netex.api.transfer.TransferConfiguration;
 import com.balugaq.netex.utils.LineOperationUtil;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkRoot;
 import io.github.sefiraat.networks.network.NodeDefinition;
@@ -220,21 +221,30 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             }
         }
 
-        final List<CompletableFuture<Void>> futures = new ArrayList<>();
-        LineOperationUtil.doOperationAsync(
-            blockMenu.getLocation(),
-            direction,
-            config.maxDistance,
-            false,
-            false,
-            (targetMenu) -> {
-                CompletableFuture<Void> future = LineOperationUtil.pushItemAsync(
-                    targetMenu.getLocation(), root, targetMenu, templates, mode, limitQuantity);
-                futures.add(future);
-                return future;
-            }).whenComplete((ignored, throwable) -> PENDING_PUSHES.remove(blockMenu.getLocation()));
-        root.removeRootPowerAsync(config.defaultRequiredPower);
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+        final Location menuLocation = blockMenu.getLocation();
+        root.tryRemoveRootPowerAsync(config.defaultRequiredPower).whenComplete((removed, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> {
+                if (throwable != null || !Boolean.TRUE.equals(removed)) {
+                    PENDING_PUSHES.remove(menuLocation);
+                    sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_POWER);
+                    return;
+                }
+
+                final List<CompletableFuture<Void>> futures = new ArrayList<>();
+                LineOperationUtil.doOperationAsync(
+                    menuLocation,
+                    direction,
+                    config.maxDistance,
+                    false,
+                    false,
+                    (targetMenu) -> {
+                        CompletableFuture<Void> future = LineOperationUtil.pushItemAsync(
+                            targetMenu.getLocation(), root, targetMenu, templates, mode, limitQuantity);
+                        futures.add(future);
+                        return future;
+                    }).whenComplete((ignored, throwable1) -> PENDING_PUSHES.remove(menuLocation));
+                sendFeedback(menuLocation, FeedbackType.WORKING);
+            }));
     }
 
     @ParametersAreNonnullByDefault
@@ -248,21 +258,30 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             return;
         }
 
-        final List<CompletableFuture<Void>> futures = new ArrayList<>();
-        LineOperationUtil.doOperationAsync(
-            blockMenu.getLocation(),
-            direction,
-            config.maxDistance,
-            false,
-            false,
-            (targetMenu) -> {
-                CompletableFuture<Void> future = LineOperationUtil.grabItemAsync(
-                    targetMenu.getLocation(), root, targetMenu, mode, limitQuantity);
-                futures.add(future);
-                return future;
-            }).whenComplete((ignored, throwable) -> PENDING_GRABS.remove(blockMenu.getLocation()));
-        root.removeRootPowerAsync(config.defaultRequiredPower);
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+        final Location menuLocation = blockMenu.getLocation();
+        root.tryRemoveRootPowerAsync(config.defaultRequiredPower).whenComplete((removed, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> {
+                if (throwable != null || !Boolean.TRUE.equals(removed)) {
+                    PENDING_GRABS.remove(menuLocation);
+                    sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_POWER);
+                    return;
+                }
+
+                final List<CompletableFuture<Void>> futures = new ArrayList<>();
+                LineOperationUtil.doOperationAsync(
+                    menuLocation,
+                    direction,
+                    config.maxDistance,
+                    false,
+                    false,
+                    (targetMenu) -> {
+                        CompletableFuture<Void> future = LineOperationUtil.grabItemAsync(
+                            targetMenu.getLocation(), root, targetMenu, mode, limitQuantity);
+                        futures.add(future);
+                        return future;
+                    }).whenComplete((ignored, throwable1) -> PENDING_GRABS.remove(menuLocation));
+                sendFeedback(menuLocation, FeedbackType.WORKING);
+            }));
     }
 
     private void tryVanillaPushItem(
@@ -287,26 +306,35 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             }
         }
 
-        final List<CompletableFuture<Void>> futures = new ArrayList<>();
-        LineOperationUtil.doVanillaOperationAsync(
-            blockMenu.getLocation(),
-            direction,
-            config.maxDistance,
-            false,
-            false,
-            (menu) -> {
-                CompletableFuture<Void> future = LineOperationUtil.pushItemAsync(
-                    menu.getLocation() == null ? blockMenu.getLocation() : menu.getLocation(),
-                    root,
-                    menu,
-                    templates,
-                    mode,
-                    limitQuantity);
-                futures.add(future);
-                return future;
-            }).whenComplete((ignored, throwable) -> PENDING_PUSHES.remove(blockMenu.getLocation()));
-        root.removeRootPowerAsync(config.defaultRequiredPower);
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+        final Location menuLocation = blockMenu.getLocation();
+        root.tryRemoveRootPowerAsync(config.defaultRequiredPower).whenComplete((removed, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> {
+                if (throwable != null || !Boolean.TRUE.equals(removed)) {
+                    PENDING_PUSHES.remove(menuLocation);
+                    sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_POWER);
+                    return;
+                }
+
+                final List<CompletableFuture<Void>> futures = new ArrayList<>();
+                LineOperationUtil.doVanillaOperationAsync(
+                    menuLocation,
+                    direction,
+                    config.maxDistance,
+                    false,
+                    false,
+                    (menu) -> {
+                        CompletableFuture<Void> future = LineOperationUtil.pushItemAsync(
+                            menu.getLocation() == null ? menuLocation : menu.getLocation(),
+                            root,
+                            menu,
+                            templates,
+                            mode,
+                            limitQuantity);
+                        futures.add(future);
+                        return future;
+                    }).whenComplete((ignored, throwable1) -> PENDING_PUSHES.remove(menuLocation));
+                sendFeedback(menuLocation, FeedbackType.WORKING);
+            }));
     }
 
     @ParametersAreNonnullByDefault
@@ -320,25 +348,34 @@ public abstract class AbstractTransfer extends AdvancedDirectional implements Re
             return;
         }
 
-        final List<CompletableFuture<Void>> futures = new ArrayList<>();
-        LineOperationUtil.doVanillaOperationAsync(
-            blockMenu.getLocation(),
-            direction,
-            config.maxDistance,
-            false,
-            false,
-            (menu) -> {
-                CompletableFuture<Void> future = LineOperationUtil.grabItemAsync(
-                    menu.getLocation() == null ? blockMenu.getLocation() : menu.getLocation(),
-                    root,
-                    menu,
-                    mode,
-                    limitQuantity);
-                futures.add(future);
-                return future;
-            }).whenComplete((ignored, throwable) -> PENDING_GRABS.remove(blockMenu.getLocation()));
-        root.removeRootPowerAsync(config.defaultRequiredPower);
-        sendFeedback(blockMenu.getLocation(), FeedbackType.WORKING);
+        final Location menuLocation = blockMenu.getLocation();
+        root.tryRemoveRootPowerAsync(config.defaultRequiredPower).whenComplete((removed, throwable) ->
+            FoliaSupport.runRegion(menuLocation, () -> {
+                if (throwable != null || !Boolean.TRUE.equals(removed)) {
+                    PENDING_GRABS.remove(menuLocation);
+                    sendFeedback(menuLocation, FeedbackType.NOT_ENOUGH_POWER);
+                    return;
+                }
+
+                final List<CompletableFuture<Void>> futures = new ArrayList<>();
+                LineOperationUtil.doVanillaOperationAsync(
+                    menuLocation,
+                    direction,
+                    config.maxDistance,
+                    false,
+                    false,
+                    (menu) -> {
+                        CompletableFuture<Void> future = LineOperationUtil.grabItemAsync(
+                            menu.getLocation() == null ? menuLocation : menu.getLocation(),
+                            root,
+                            menu,
+                            mode,
+                            limitQuantity);
+                        futures.add(future);
+                        return future;
+                    }).whenComplete((ignored, throwable1) -> PENDING_GRABS.remove(menuLocation));
+                sendFeedback(menuLocation, FeedbackType.WORKING);
+            }));
     }
 
     @Override
