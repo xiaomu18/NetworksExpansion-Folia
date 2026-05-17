@@ -5,6 +5,7 @@ import com.balugaq.netex.api.events.NetworkRootReadyEvent;
 import com.balugaq.netex.utils.Lang;
 import com.xzavier0722.mc.plugin.slimefun4.storage.controller.SlimefunBlockData;
 import com.xzavier0722.mc.plugin.slimefun4.storage.util.StorageCacheUtils;
+import com.ytdd9527.networksexpansion.utils.FoliaSupport;
 import io.github.sefiraat.networks.NetworkStorage;
 import io.github.sefiraat.networks.network.NetworkNode;
 import io.github.sefiraat.networks.network.NetworkRoot;
@@ -40,6 +41,7 @@ public class NetworkController extends NetworkObject {
     private static final String CRAYON = "crayon";
     private static final Map<Location, NetworkRoot> NETWORKS = new ConcurrentHashMap<>();
     private static final Set<Location> CRAYONS = ConcurrentHashMap.newKeySet();
+    private static final Set<Location> PENDING_BUILDS = ConcurrentHashMap.newKeySet();
     protected final Map<Location, Boolean> firstTickMap = new ConcurrentHashMap<>();
 
     @Getter
@@ -69,27 +71,39 @@ public class NetworkController extends NetworkObject {
                 }
 
                 addToRegistry(block);
+                final Location controllerLocation = block.getLocation();
+                if (!PENDING_BUILDS.add(controllerLocation)) {
+                    return;
+                }
+
                 NetworkRoot networkRoot = new NetworkRoot(
-                    block.getLocation(),
+                    controllerLocation,
                     NodeType.CONTROLLER,
                     maxNodes.getValue(),
-                    recordFlow.getOrDefault(block.getLocation(), false),
-                    records.get(block.getLocation()));
-                networkRoot.addAllChildren();
+                    recordFlow.getOrDefault(controllerLocation, false),
+                    records.get(controllerLocation));
 
-                boolean crayon = CRAYONS.contains(block.getLocation());
+                boolean crayon = CRAYONS.contains(controllerLocation);
                 if (crayon) {
                     networkRoot.setDisplayParticles(true);
                 }
 
-                NETWORKS.put(block.getLocation(), networkRoot);
+                networkRoot.addAllChildrenAsync().whenComplete((ignored, throwable) ->
+                    FoliaSupport.runRegion(controllerLocation, () -> {
+                        PENDING_BUILDS.remove(controllerLocation);
+                        if (throwable != null) {
+                            return;
+                        }
 
-                NodeDefinition definition = NetworkStorage.getNode(block.getLocation());
-                if (definition != null) {
-                    definition.setNode(networkRoot);
-                }
-                NetworkRootReadyEvent event = new NetworkRootReadyEvent(networkRoot);
-                Bukkit.getPluginManager().callEvent(event);
+                        NETWORKS.put(controllerLocation, networkRoot);
+
+                        NodeDefinition definition = NetworkStorage.getNode(controllerLocation);
+                        if (definition != null) {
+                            definition.setNode(networkRoot);
+                        }
+                        NetworkRootReadyEvent event = new NetworkRootReadyEvent(networkRoot);
+                        Bukkit.getPluginManager().callEvent(event);
+                    }));
             }
         });
     }

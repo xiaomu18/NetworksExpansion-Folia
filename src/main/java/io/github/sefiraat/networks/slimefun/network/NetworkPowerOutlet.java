@@ -52,12 +52,6 @@ public class NetworkPowerOutlet extends NetworkDirectional {
         final BlockFace blockFace = getCurrentDirection(menu);
         final Block targetBlock = b.getRelative(blockFace);
         final NetworkRoot root = definition.getNode().getRoot();
-        final long power = root.getRootPower();
-
-        if (power <= 0) {
-            sendFeedback(menu.getLocation(), FeedbackType.NOT_ENOUGH_POWER);
-            return;
-        }
 
         final org.bukkit.Location menuLocation = menu.getLocation();
         final org.bukkit.Location targetLocation = targetBlock.getLocation();
@@ -80,14 +74,8 @@ public class NetworkPowerOutlet extends NetworkDirectional {
                 return;
             }
 
-            final String charge = blockData.getData("energy-charge");
-            int chargeInt = 0;
-            if (charge != null) {
-                chargeInt = Integer.parseInt(charge);
-            }
-
             final int capacity = component.getCapacity();
-            final int space = capacity - chargeInt;
+            final int space = capacity - component.getCharge(targetLocation);
 
             if (space <= 0) {
                 FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.FULL_ENERGY_BUFFER));
@@ -95,10 +83,45 @@ public class NetworkPowerOutlet extends NetworkDirectional {
             }
 
             final int possibleGeneration = Math.min(rate, space);
-            final int gen = power < possibleGeneration ? (int) power : possibleGeneration;
-            component.addCharge(targetLocation, gen);
-            root.removeRootPowerAsync(gen).whenComplete((ignored, throwable) ->
-                FoliaSupport.runRegion(menuLocation, () -> sendFeedback(menuLocation, FeedbackType.WORKING)));
+            root.removeRootPowerUpToAsync(possibleGeneration)
+                .thenCompose(reserved -> {
+                    if (reserved <= 0) {
+                        return java.util.concurrent.CompletableFuture.completedFuture(FeedbackType.NOT_ENOUGH_POWER);
+                    }
+
+                    return FoliaSupport.supplyRegion(targetLocation, () -> {
+                        SlimefunBlockData currentData = StorageCacheUtils.getBlock(targetLocation);
+                        if (currentData == null || !currentData.isDataLoaded()) {
+                            return 0;
+                        }
+
+                        final SlimefunItem currentItem = SlimefunItem.getById(currentData.getSfId());
+                        if (!(currentItem instanceof EnergyNetComponent currentComponent)
+                            || currentItem instanceof NetworkObject) {
+                            return 0;
+                        }
+
+                        final int currentSpace =
+                            Math.max(0, currentComponent.getCapacity() - currentComponent.getCharge(targetLocation));
+                        final int generated = Math.min(reserved, currentSpace);
+                        if (generated > 0) {
+                            currentComponent.addCharge(targetLocation, generated);
+                        }
+                        return generated;
+                    }).thenCompose(generated -> {
+                        final int refund = reserved - generated;
+                        if (refund <= 0) {
+                            return java.util.concurrent.CompletableFuture.completedFuture(FeedbackType.WORKING);
+                        }
+                        return root.restoreRootPowerAsync(refund)
+                            .thenApply(ignored -> generated > 0 ? FeedbackType.WORKING : FeedbackType.INVALID_BLOCK);
+                    });
+                })
+                .whenComplete((feedback, throwable) -> FoliaSupport.runRegion(
+                    menuLocation,
+                    () -> sendFeedback(menuLocation, throwable == null && feedback != null
+                        ? feedback
+                        : FeedbackType.NOT_ENOUGH_POWER)));
         });
     }
 }

@@ -812,20 +812,46 @@ public class LineOperationUtil {
             }
 
             final int possibleGeneration = Math.min(rate, space);
-            final long power = root.getRootPower();
-            if (power <= 0) {
-                return 0;
-            }
-
-            final int gen = power < possibleGeneration ? (int) power : possibleGeneration;
-            component.addCharge(location, gen);
-            return gen;
-        }).thenCompose(generated -> {
-            if (generated <= 0) {
+            return possibleGeneration;
+        }).thenCompose(possibleGeneration -> {
+            if (possibleGeneration <= 0) {
                 return CompletableFuture.completedFuture(null);
             }
 
-            return root.removeRootPowerAsync(generated);
+            return root.removeRootPowerUpToAsync(possibleGeneration).thenCompose(reserved -> {
+                if (reserved <= 0) {
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                return FoliaSupport.supplyRegion(location, () -> {
+                    final SlimefunBlockData blockData = StorageCacheUtils.getBlock(location);
+                    if (blockData == null || !blockData.isDataLoaded()) {
+                        return 0;
+                    }
+
+                    final SlimefunItem slimefunItem = SlimefunItem.getById(blockData.getSfId());
+                    if (!(slimefunItem instanceof EnergyNetComponent component) || slimefunItem instanceof NetworkObject) {
+                        return 0;
+                    }
+
+                    final int existingCharge = component.getCharge(location);
+                    final int capacity = component.getCapacity();
+                    final int space = Math.max(0, capacity - existingCharge);
+                    final int generated = Math.min(reserved, space);
+                    if (generated > 0) {
+                        component.addCharge(location, generated);
+                    }
+                    return generated;
+                }).thenCompose(generated -> {
+                    final int refund = reserved - generated;
+                    if (refund <= 0) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    return root.restoreRootPowerAsync(refund).thenAccept(ignored -> {
+                    });
+                });
+            });
         });
     }
 

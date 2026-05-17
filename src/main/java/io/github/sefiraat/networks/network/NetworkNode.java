@@ -8,6 +8,8 @@ import io.github.sefiraat.networks.slimefun.network.NetworkPowerNode;
 import io.github.thebusybiscuit.slimefun4.api.items.SlimefunItem;
 import io.github.thebusybiscuit.slimefun4.implementation.Slimefun;
 import lombok.Getter;
+import me.mrCookieSlime.Slimefun.api.inventory.BlockMenu;
+import me.mrCookieSlime.Slimefun.api.item_transport.ItemTransportFlow;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.BlockFace;
@@ -15,9 +17,11 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class NetworkNode {
@@ -40,10 +44,17 @@ public class NetworkNode {
     @Getter
     protected NetworkRoot root = null;
 
+    private record NodeScan(@NotNull NodeDefinition definition, @NotNull NodeType type, long power, boolean menuValidated) {
+    }
+
     public NetworkNode(Location location, NodeType type) {
+        this(location, type, -1);
+    }
+
+    protected NetworkNode(Location location, NodeType type, long power) {
         this.nodePosition = location;
         this.nodeType = type;
-        this.power = retrieveBlockCharge();
+        this.power = power >= 0 ? power : retrieveBlockCharge();
     }
 
     public void addChild(@NotNull NetworkNode child) {
@@ -87,51 +98,120 @@ public class NetworkNode {
     }
 
     public void addAllChildren() {
+        addAllChildrenAsync();
+    }
+
+    public @NotNull CompletableFuture<Void> addAllChildrenAsync() {
         if (this.root == null) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         Deque<NetworkNode> nodeStack = new ArrayDeque<>(200);
         nodeStack.push(this);
+        return addAllChildrenAsync(nodeStack);
+    }
 
+    private @NotNull CompletableFuture<Void> addAllChildrenAsync(@NotNull Deque<NetworkNode> nodeStack) {
         while (!nodeStack.isEmpty()) {
             NetworkNode currentNode = nodeStack.pop();
+            CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
 
-            // Loop through all possible locations
             for (BlockFace face : VALID_FACES) {
                 final Location testLocation = currentNode.nodePosition.clone().add(face.getDirection());
-                if (testLocation.getWorld() != null && !FoliaSupport.isOwnedByCurrentRegion(testLocation)) {
-                    continue;
-                }
-                final NodeDefinition testDefinition = NetworkStorage.getNode(testLocation);
 
-                if (testDefinition == null) {
-                    continue;
-                }
-
-                final NodeType testType = testDefinition.getType();
-
-                // Kill additional controllers if it isn't the root
-                if (testType == NodeType.CONTROLLER && !testLocation.equals(this.root.nodePosition)) {
-                    killAdditionalController(testLocation);
-                    continue;
-                }
-
-                // Check if it's in the network already and, if not, create a child node and propagate further.
-                if (testType != NodeType.CONTROLLER && !currentNode.networkContains(testLocation)) {
-                    if (this.root.getNodeCount() >= this.root.getMaxNodes()) {
-                        this.root.setOverburdened(true);
-                        return;
+                chain = chain.thenCompose(ignored -> scanNode(testLocation).thenCompose(scan -> {
+                    if (scan == null || this.root == null) {
+                        return CompletableFuture.completedFuture(null);
                     }
-                    final NetworkNode networkNode = new NetworkNode(testLocation, testType);
-                    currentNode.addChild(networkNode);
 
-                    nodeStack.push(networkNode);
-                    testDefinition.setNode(networkNode);
-                    NetworkStorage.registerNode(testLocation, testDefinition);
-                }
+                    final Location ownerLocation = this.root.nodePosition;
+                    return FoliaSupport.supplyRegion(ownerLocation, () -> {
+                        if (this.root.isOverburdened()) {
+                            return null;
+                        }
+
+                        final NodeType testType = scan.type();
+                        if (testType == NodeType.CONTROLLER && !testLocation.equals(this.root.nodePosition)) {
+                            killAdditionalController(testLocation);
+                            return null;
+                        }
+
+                        if (testType == NodeType.CONTROLLER || currentNode.networkContains(testLocation)) {
+                            return null;
+                        }
+
+                        if (this.root.getNodeCount() >= this.root.getMaxNodes()) {
+                            this.root.setOverburdened(true);
+                            nodeStack.clear();
+                            return null;
+                        }
+
+                        final NetworkNode networkNode = new NetworkNode(testLocation, testType, scan.power());
+                        currentNode.addChild(networkNode, scan.menuValidated());
+
+                        nodeStack.push(networkNode);
+                        scan.definition().setNode(networkNode);
+                        NetworkStorage.registerNode(testLocation, scan.definition());
+                        return null;
+                    });
+                }));
             }
+
+            return chain.thenCompose(ignored -> addAllChildrenAsync(nodeStack));
         }
+
+        return CompletableFuture.completedFuture(null);
+    }
+
+    private @NotNull CompletableFuture<NodeScan> scanNode(@NotNull Location location) {
+        if (location.getWorld() == null
+            || !location.isWorldLoaded()
+            || !location.getWorld().isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4)) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return FoliaSupport.supplyRegion(location, () -> {
+            final NodeDefinition definition = NetworkStorage.getNode(location);
+            if (definition == null) {
+                return null;
+            }
+
+            final NodeType type = definition.getType();
+            long power = 0;
+            boolean menuValidated = false;
+            if (type == NodeType.POWER_NODE) {
+                final SlimefunItem item = StorageCacheUtils.getSfItem(location);
+                if (item instanceof NetworkPowerNode powerNode) {
+                    power = powerNode.getCharge(location);
+                }
+            } else if (type == NodeType.CELL) {
+                BlockMenu menu = StorageCacheUtils.getMenu(location);
+                menuValidated = menu != null && Arrays.equals(
+                    menu.getPreset().getSlotsAccessedByItemTransport(ItemTransportFlow.WITHDRAW),
+                    NetworkRoot.CELL_AVAILABLE_SLOTS);
+            } else if (type == NodeType.GREEDY_BLOCK) {
+                BlockMenu menu = StorageCacheUtils.getMenu(location);
+                menuValidated = menu != null && Arrays.equals(
+                    menu.getPreset().getSlotsAccessedByItemTransport(ItemTransportFlow.WITHDRAW),
+                    NetworkRoot.GREEDY_BLOCK_AVAILABLE_SLOTS);
+            } else if (type == NodeType.ADVANCED_GREEDY_BLOCK) {
+                BlockMenu menu = StorageCacheUtils.getMenu(location);
+                menuValidated = menu != null && Arrays.equals(
+                    menu.getPreset().getSlotsAccessedByItemTransport(ItemTransportFlow.WITHDRAW),
+                    NetworkRoot.ADVANCED_GREEDY_BLOCK_AVAILABLE_SLOTS);
+            }
+            return new NodeScan(definition, type, power, menuValidated);
+        });
+    }
+
+    private void addChild(@NotNull NetworkNode child, boolean menuValidated) {
+        child.setParent(this);
+        child.setRoot(this.getRoot());
+        if (this.root != null) {
+            this.root.addRootPower(child.getPower());
+            this.root.registerNode(child.nodePosition, child.nodeType, menuValidated);
+        }
+        this.childrenNodes.add(child);
     }
 
     private void killAdditionalController(@NotNull Location location) {

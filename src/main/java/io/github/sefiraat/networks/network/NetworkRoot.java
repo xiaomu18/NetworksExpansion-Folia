@@ -91,10 +91,10 @@ public class NetworkRoot extends NetworkNode {
     private final long CREATED_TIME = System.currentTimeMillis();
     @Getter
     private final Set<Location> nodeLocations = ConcurrentHashMap.newKeySet();
-    private final int[] CELL_AVAILABLE_SLOTS =
+    static final int[] CELL_AVAILABLE_SLOTS =
         NetworkCell.SLOTS.stream().mapToInt(i -> i).toArray();
-    private final int[] GREEDY_BLOCK_AVAILABLE_SLOTS = new int[]{NetworkGreedyBlock.INPUT_SLOT};
-    private final int[] ADVANCED_GREEDY_BLOCK_AVAILABLE_SLOTS = AdvancedGreedyBlock.INPUT_SLOTS;
+    static final int[] GREEDY_BLOCK_AVAILABLE_SLOTS = new int[]{NetworkGreedyBlock.INPUT_SLOT};
+    static final int[] ADVANCED_GREEDY_BLOCK_AVAILABLE_SLOTS = AdvancedGreedyBlock.INPUT_SLOTS;
     @Getter
     private final Set<Location> bridges = ConcurrentHashMap.newKeySet();
     @Getter
@@ -471,6 +471,10 @@ public class NetworkRoot extends NetworkNode {
     }
 
     public void registerNode(@NotNull Location location, @NotNull NodeType type) {
+        registerNode(location, type, false);
+    }
+
+    public void registerNode(@NotNull Location location, @NotNull NodeType type, boolean menuValidated) {
         nodeLocations.add(location);
         switch (type) {
             case CONTROLLER -> this.controller = location;
@@ -483,6 +487,10 @@ public class NetworkRoot extends NetworkNode {
                 /*
                  * Fix https://github.com/Sefiraat/Networks/issues/211
                  */
+                if (menuValidated) {
+                    cells.add(location);
+                    return;
+                }
                 BlockMenu blockMenu = getAccessibleMenu(location);
                 if (blockMenu == null) {
                     return;
@@ -504,6 +512,10 @@ public class NetworkRoot extends NetworkNode {
                 /*
                  * Fix https://github.com/Sefiraat/Networks/issues/211
                  */
+                if (menuValidated) {
+                    greedyBlocks.add(location);
+                    return;
+                }
                 BlockMenu blockMenu = getAccessibleMenu(location);
                 if (blockMenu == null) {
                     return;
@@ -527,6 +539,10 @@ public class NetworkRoot extends NetworkNode {
                 /*
                  * Fix https://github.com/Sefiraat/Networks/issues/211
                  */
+                if (menuValidated) {
+                    advancedGreedyBlocks.add(location);
+                    return;
+                }
                 BlockMenu blockMenu = getAccessibleMenu(location);
                 if (blockMenu == null) {
                     return;
@@ -2235,6 +2251,115 @@ public class NetworkRoot extends NetworkNode {
 
     public @NotNull CompletableFuture<Void> removeRootPowerAsync(long power) {
         return tryRemoveRootPowerAsync(power).thenAccept(ignored -> {
+        });
+    }
+
+    public @NotNull CompletableFuture<Integer> removeRootPowerUpToAsync(long maxPower) {
+        if (maxPower <= 0) {
+            return CompletableFuture.completedFuture(0);
+        }
+
+        final Location ownerLocation = getOwnerLocation();
+        return FoliaSupport.supplyRegion(ownerLocation, () -> {
+            final long reserved = Math.min(this.rootPower, maxPower);
+            if (reserved <= 0) {
+                return 0L;
+            }
+
+            this.rootPower -= reserved;
+            return reserved;
+        }).thenCompose(reserved -> {
+            if (reserved <= 0) {
+                return CompletableFuture.completedFuture(0);
+            }
+
+            final List<Location> nodes = new ArrayList<>(powerNodes);
+            final long[] remaining = {reserved};
+            CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+
+            for (Location node : nodes) {
+                chain = chain.thenCompose(ignored -> {
+                    if (remaining[0] <= 0) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    return FoliaSupport.supplyRegion(node, () -> {
+                        final SlimefunItem item = StorageCacheUtils.getSfItem(node);
+                        if (!(item instanceof NetworkPowerNode powerNode)) {
+                            return 0;
+                        }
+
+                        final int charge = powerNode.getCharge(node);
+                        if (charge <= 0) {
+                            return 0;
+                        }
+
+                        final int toRemove = (int) Math.min(remaining[0], charge);
+                        powerNode.removeCharge(node, toRemove);
+                        return toRemove;
+                    }).thenAccept(removed -> remaining[0] -= removed);
+                });
+            }
+
+            return chain.thenCompose(ignored -> {
+                final long removed = reserved - remaining[0];
+                if (remaining[0] <= 0) {
+                    return CompletableFuture.completedFuture((int) Math.min(Integer.MAX_VALUE, removed));
+                }
+
+                final long refund = remaining[0];
+                return FoliaSupport.supplyRegion(ownerLocation, () -> {
+                    this.rootPower += refund;
+                    return (int) Math.min(Integer.MAX_VALUE, removed);
+                });
+            });
+        });
+    }
+
+    public @NotNull CompletableFuture<Integer> restoreRootPowerAsync(long power) {
+        if (power <= 0) {
+            return CompletableFuture.completedFuture(0);
+        }
+
+        final List<Location> nodes = new ArrayList<>(powerNodes);
+        final long[] remaining = {power};
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+
+        for (Location node : nodes) {
+            chain = chain.thenCompose(ignored -> {
+                if (remaining[0] <= 0) {
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                return FoliaSupport.supplyRegion(node, () -> {
+                    final SlimefunItem item = StorageCacheUtils.getSfItem(node);
+                    if (!(item instanceof NetworkPowerNode powerNode)) {
+                        return 0;
+                    }
+
+                    final int space = Math.max(0, powerNode.getCapacity() - powerNode.getCharge(node));
+                    if (space <= 0) {
+                        return 0;
+                    }
+
+                    final int toAdd = (int) Math.min(remaining[0], space);
+                    powerNode.addCharge(node, toAdd);
+                    return toAdd;
+                }).thenAccept(added -> remaining[0] -= added);
+            });
+        }
+
+        return chain.thenCompose(ignored -> {
+            final long restored = power - remaining[0];
+            if (restored <= 0) {
+                return CompletableFuture.completedFuture(0);
+            }
+
+            final Location ownerLocation = getOwnerLocation();
+            return FoliaSupport.supplyRegion(ownerLocation, () -> {
+                this.rootPower += restored;
+                return (int) Math.min(Integer.MAX_VALUE, restored);
+            });
         });
     }
 
